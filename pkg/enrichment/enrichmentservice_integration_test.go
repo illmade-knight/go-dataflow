@@ -14,8 +14,8 @@ import (
 	"github.com/illmade-knight/go-dataflow/pkg/enrichment"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-dataflow/pkg/types"
+	"github.com/illmade-knight/go-test/emulators"
 
-	"github.com/illmade-knight/go-dataflow/helpers/emulators"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

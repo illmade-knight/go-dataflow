@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	emulators2 "github.com/illmade-knight/go-iot/helpers/emulators"
-	"github.com/illmade-knight/go-iot/pkg/types"
 	"io"
 	"os"
 	"strconv"
@@ -18,13 +16,42 @@ import (
 
 	"cloud.google.com/go/bigquery"
 	"cloud.google.com/go/pubsub"
-	"github.com/illmade-knight/go-iot/pkg/bqstore"
-	"github.com/illmade-knight/go-iot/pkg/messagepipeline" // Using shared consumers package
+
+	"github.com/illmade-knight/go-dataflow/pkg/bqstore"
+	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline" // Using shared consumers package
+	"github.com/illmade-knight/go-dataflow/pkg/types"
+	"github.com/illmade-knight/go-test/emulators"
+
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
 )
+
+type MonitorReadings struct {
+	DE       string
+	Sequence int
+	Battery  int
+}
+
+type MonitorMessage struct {
+	Payload *MonitorReadings `json:"payload"`
+	// Other top-level fields from the message can be added here if needed.
+}
+
+func ConsumedMessageTransformer(msg types.ConsumedMessage) (*MonitorReadings, bool, error) {
+	var upstreamMsg MonitorMessage
+	if err := json.Unmarshal(msg.Payload, &upstreamMsg); err != nil {
+		// This is a malformed message, return an error to Nack it.
+		return nil, false, fmt.Errorf("failed to unmarshal upstream message: %w", err)
+	}
+	// If the inner payload is nil, we want to skip this message but still Ack it.
+	if upstreamMsg.Payload == nil {
+		return nil, true, nil
+	}
+	// Success case
+	return upstreamMsg.Payload, false, nil
+}
 
 // --- Constants for the integration test environment (Unchanged) ---
 const (
@@ -42,7 +69,7 @@ type TestUpstreamMessage struct {
 	Topic     string
 	MessageID string
 	Timestamp time.Time
-	Payload   *types.GardenMonitorReadings
+	Payload   *MonitorReadings
 }
 
 // TestBigQueryService_Integration_FullFlow tests the entire generic bqstore flow.
@@ -53,16 +80,16 @@ func TestBigQueryService_Integration_FullFlow(t *testing.T) {
 	pubsubCtx, pubsubCancel := context.WithTimeout(ctx, time.Second*20)
 	defer pubsubCancel()
 
-	pubsubConfig := emulators2.GetDefaultPubsubConfig(testProjectID, map[string]string{testInputTopicID: testInputSubscriptionID})
+	pubsubConfig := emulators.GetDefaultPubsubConfig(testProjectID, map[string]string{testInputTopicID: testInputSubscriptionID})
 
-	connection := emulators2.SetupPubsubEmulator(t, pubsubCtx, pubsubConfig)
+	connection := emulators.SetupPubsubEmulator(t, pubsubCtx, pubsubConfig)
 
 	bigqueryCtx, bigqueryCancel := context.WithTimeout(ctx, time.Second*20)
 	defer bigqueryCancel()
 
-	bigqueryCfg := emulators2.GetDefaultBigQueryConfig(testProjectID, map[string]string{testBigQueryDatasetID: testBigQueryTableID},
-		map[string]interface{}{testBigQueryTableID: types.GardenMonitorReadings{}})
-	bigqueryConnection := emulators2.SetupBigQueryEmulator(t, bigqueryCtx, bigqueryCfg)
+	bigqueryCfg := emulators.GetDefaultBigQueryConfig(testProjectID, map[string]string{testBigQueryDatasetID: testBigQueryTableID},
+		map[string]interface{}{testBigQueryTableID: MonitorReadings{}})
+	bigqueryConnection := emulators.SetupBigQueryEmulator(t, bigqueryCtx, bigqueryCfg)
 
 	// --- Configuration setup (Unchanged) ---
 	var logBuf bytes.Buffer
@@ -95,12 +122,12 @@ func TestBigQueryService_Integration_FullFlow(t *testing.T) {
 	defer bqClient.Close()
 
 	// *** REFACTORED PART: Use the new, single convenience constructor ***
-	batchInserter, err := bqstore.NewBigQueryBatchProcessor[types.GardenMonitorReadings](ctx, bqClient, batcherCfg, bqInserterCfg, logger)
+	batchInserter, err := bqstore.NewBigQueryBatchProcessor[MonitorReadings](ctx, bqClient, batcherCfg, bqInserterCfg, logger)
 	require.NoError(t, err)
 
 	// *** REFACTORED PART: Use the new service constructor ***
 	numWorkers := 2
-	processingService, err := bqstore.NewBigQueryService[types.GardenMonitorReadings](numWorkers, consumer, batchInserter, types.ConsumedMessageTransformer, logger)
+	processingService, err := bqstore.NewBigQueryService[MonitorReadings](numWorkers, consumer, batchInserter, ConsumedMessageTransformer, logger)
 	require.NoError(t, err)
 
 	// --- Test Execution (Unchanged) ---
@@ -116,9 +143,9 @@ func TestBigQueryService_Integration_FullFlow(t *testing.T) {
 	inputTopic := pubsubTestPublisherClient.Topic(testInputTopicID)
 	defer inputTopic.Stop()
 
-	var lastTestPayload types.GardenMonitorReadings
+	var lastTestPayload MonitorReadings
 	for i := 0; i < messageCount; i++ {
-		iPayload := types.GardenMonitorReadings{
+		iPayload := MonitorReadings{
 			DE:       testDeviceUID,
 			Sequence: 1337 + i,
 			Battery:  95 - i,
@@ -151,9 +178,9 @@ func TestBigQueryService_Integration_FullFlow(t *testing.T) {
 	it, err := query.Read(ctx)
 	require.NoError(t, err, "query.Read failed")
 
-	var receivedRows []types.GardenMonitorReadings
+	var receivedRows []MonitorReadings
 	for {
-		var row types.GardenMonitorReadings
+		var row MonitorReadings
 		err := it.Next(&row)
 		if errors.Is(err, iterator.Done) {
 			break

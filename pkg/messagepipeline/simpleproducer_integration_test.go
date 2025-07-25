@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/illmade-knight/go-iot/helpers/emulators"
 	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
+	"github.com/illmade-knight/go-test/emulators"
+
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
