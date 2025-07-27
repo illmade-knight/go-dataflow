@@ -40,7 +40,7 @@ func TestGooglePubsubConsumer_Lifecycle_And_MessageReception(t *testing.T) {
 	client, err := pubsub.NewClient(ctx, projectID, clientOptions...)
 	require.NoError(t, err)
 
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(cfg, client, zerolog.Nop())
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, cfg, client, zerolog.Nop())
 	require.NoError(t, err)
 	require.NotNil(t, consumer)
 

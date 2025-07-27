@@ -3,9 +3,6 @@
 package icestore_test
 
 import (
-	"bufio"
-	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -149,7 +146,7 @@ func TestIceStorageService_Integration(t *testing.T) {
 			}
 			psClient, err := pubsub.NewClient(ctx, testProjectID, pubsubConnection.ClientOptions...)
 			require.NoError(t, err)
-			consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, logger)
+			consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, psClient, logger)
 			require.NoError(t, err)
 
 			batcher, err := icestore.NewGCSBatchProcessor(
@@ -189,7 +186,7 @@ func TestIceStorageService_Integration(t *testing.T) {
 					require.NoError(t, err)
 				}
 				topic.Stop()
-				publisherClient.Close()
+				_ = publisherClient.Close()
 				logger.Info().Int("count", len(tc.messagesToPublish)).Msg("Published test messages")
 			}
 
@@ -249,23 +246,4 @@ func listGCSObjectAttrs(ctx context.Context, bucket *storage.BucketHandle) ([]*s
 		attrs = append(attrs, objAttrs)
 	}
 	return attrs, nil
-}
-
-// Unused helper, kept for potential future debugging.
-func decompressAndScan(data []byte) ([]icestore.ArchivalData, error) {
-	gzReader, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	defer gzReader.Close()
-	var records []icestore.ArchivalData
-	scanner := bufio.NewScanner(gzReader)
-	for scanner.Scan() {
-		var record icestore.ArchivalData
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			return nil, err
-		}
-		records = append(records, record)
-	}
-	return records, scanner.Err()
 }

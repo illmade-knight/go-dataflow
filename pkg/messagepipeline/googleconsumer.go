@@ -41,10 +41,10 @@ type GooglePubsubConsumer struct {
 	doneChan           chan struct{}
 }
 
-func NewGooglePubsubConsumer(cfg *GooglePubsubConsumerConfig, client *pubsub.Client, logger zerolog.Logger) (*GooglePubsubConsumer, error) {
+func NewGooglePubsubConsumer(ctx context.Context, cfg *GooglePubsubConsumerConfig, client *pubsub.Client, logger zerolog.Logger) (*GooglePubsubConsumer, error) {
 	sub := client.Subscription(cfg.SubscriptionID)
 
-	subContext, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	subContext, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	e, err := sub.Exists(subContext)
 	if !e || err != nil {

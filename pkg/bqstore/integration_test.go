@@ -114,12 +114,14 @@ func TestBigQueryService_Integration_FullFlow(t *testing.T) {
 	//opts := []option.ClientOption{option.WithEndpoint("localhost:58752"), option.WithoutAuthentication()}
 	psClient, err := pubsub.NewClient(ctx, testProjectID, connection.ClientOptions...)
 	require.NoError(t, err)
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, logger)
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, psClient, logger)
 	require.NoError(t, err)
 
 	bqClient, err := bigquery.NewClient(ctx, testProjectID, bigqueryConnection.ClientOptions...)
 	require.NotNil(t, bqClient)
-	defer bqClient.Close()
+	t.Cleanup(func() {
+		_ = bqClient.Close()
+	})
 
 	// *** REFACTORED PART: Use the new, single convenience constructor ***
 	batchInserter, err := bqstore.NewBigQueryBatchProcessor[MonitorReadings](ctx, bqClient, batcherCfg, bqInserterCfg, logger)
@@ -139,7 +141,9 @@ func TestBigQueryService_Integration_FullFlow(t *testing.T) {
 	const messageCount = 7
 	pubsubTestPublisherClient, err := pubsub.NewClient(ctx, testProjectID)
 	require.NoError(t, err)
-	defer pubsubTestPublisherClient.Close()
+	t.Cleanup(func() {
+		_ = pubsubTestPublisherClient.Close()
+	})
 	inputTopic := pubsubTestPublisherClient.Topic(testInputTopicID)
 	defer inputTopic.Stop()
 

@@ -83,6 +83,7 @@ type GooglePubsubProducer[T any] struct {
 
 // NewGooglePubsubProducer creates a new GooglePubsubProducer.
 func NewGooglePubsubProducer[T any](
+	ctx context.Context,
 	client *pubsub.Client,
 	cfg *GooglePubsubProducerConfig,
 	logger zerolog.Logger,
@@ -109,7 +110,7 @@ func NewGooglePubsubProducer[T any](
 	var existsErr error
 
 	for i := 0; i < maxRetries; i++ {
-		topicCtx, topicCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		topicCtx, topicCancel := context.WithTimeout(ctx, 5*time.Second)
 		exists, existsErr = topic.Exists(topicCtx)
 		topicCancel()
 
@@ -121,7 +122,7 @@ func NewGooglePubsubProducer[T any](
 		if existsErr != nil {
 			logger.Warn().Err(existsErr).Str("topic_id", cfg.TopicID).Int("attempt", i+1).
 				Msg("NewGooglePubsubProducer: Failed to check existence of topic, retrying...")
-		} else if !exists {
+		} else {
 			logger.Warn().Str("topic_id", cfg.TopicID).Int("attempt", i+1).
 				Msg("NewGooglePubsubProducer: Topic reported as not existing by producer's internal check, retrying...")
 		}

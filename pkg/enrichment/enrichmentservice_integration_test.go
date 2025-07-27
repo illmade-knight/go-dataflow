@@ -112,13 +112,14 @@ func TestEnrichmentService_WithDeviceMetadata(t *testing.T) {
 	require.NoError(t, err)
 	defer sharedClient.Close()
 
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx,
 		&messagepipeline.GooglePubsubConsumerConfig{ProjectID: projectID, SubscriptionID: inputSubID},
 		sharedClient, logger,
 	)
 	require.NoError(t, err)
 
 	mainProducer, err := messagepipeline.NewGooglePubsubProducer[types.PublishMessage](
+		ctx,
 		sharedClient,
 		&messagepipeline.GooglePubsubProducerConfig{ProjectID: projectID, TopicID: outputTopicID, BatchDelay: 20 * time.Millisecond},
 		logger,

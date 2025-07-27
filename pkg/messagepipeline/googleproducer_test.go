@@ -41,7 +41,7 @@ func setupTestPubsub(t *testing.T, projectID string, topicID string) (*pubsub.Cl
 	t.Helper()
 	ctx := context.Background()
 	srv := pstest.NewServer()
-	t.Cleanup(func() { srv.Close() })
+	t.Cleanup(func() { _ = srv.Close() })
 
 	opts := []option.ClientOption{
 		option.WithEndpoint(srv.Addr),
@@ -51,7 +51,7 @@ func setupTestPubsub(t *testing.T, projectID string, topicID string) (*pubsub.Cl
 
 	client, err := pubsub.NewClient(ctx, projectID, opts...)
 	require.NoError(t, err)
-	t.Cleanup(func() { client.Close() }) // Client is cleaned up here.
+	t.Cleanup(func() { _ = client.Close() }) // Client is cleaned up here.
 
 	topic, err := client.CreateTopic(ctx, topicID)
 	require.NoError(t, err)
@@ -79,11 +79,12 @@ type TestPayload struct {
 func TestGooglePubsubProducer_InitializationErrors(t *testing.T) {
 	t.Parallel()
 	baseProjectID := "test-init-project"
+	ctx := context.Background()
 
 	t.Run("nil client", func(t *testing.T) {
 		t.Parallel()
 		cfg := &messagepipeline.GooglePubsubProducerConfig{ProjectID: baseProjectID, TopicID: "any-topic"}
-		producer, err := messagepipeline.NewGooglePubsubProducer[TestPayload](nil, cfg, zerolog.Nop())
+		producer, err := messagepipeline.NewGooglePubsubProducer[TestPayload](ctx, nil, cfg, zerolog.Nop())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "pubsub client cannot be nil")
 		assert.Nil(t, producer)
@@ -94,7 +95,7 @@ func TestGooglePubsubProducer_InitializationErrors(t *testing.T) {
 		localUniqueID := fmt.Sprintf("%s-%d", sanitizedTestName(t), time.Now().UnixNano())
 		localProjectID := fmt.Sprintf("%s-%s", baseProjectID, localUniqueID)
 		localSrv := pstest.NewServer()
-		t.Cleanup(func() { localSrv.Close() })
+		t.Cleanup(func() { _ = localSrv.Close() })
 
 		opts := []option.ClientOption{
 			option.WithEndpoint(localSrv.Addr),
@@ -103,10 +104,10 @@ func TestGooglePubsubProducer_InitializationErrors(t *testing.T) {
 		}
 		localClient, err := pubsub.NewClient(context.Background(), localProjectID, opts...)
 		require.NoError(t, err)
-		t.Cleanup(func() { localClient.Close() })
+		t.Cleanup(func() { _ = localClient.Close() })
 
 		cfg := &messagepipeline.GooglePubsubProducerConfig{ProjectID: localProjectID, TopicID: "non-existent-topic"}
-		producer, err := messagepipeline.NewGooglePubsubProducer[TestPayload](localClient, cfg, zerolog.Nop())
+		producer, err := messagepipeline.NewGooglePubsubProducer[TestPayload](ctx, localClient, cfg, zerolog.Nop())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "topic non-existent-topic does not exist")
 		assert.Nil(t, producer)
@@ -117,6 +118,7 @@ func TestGooglePubsubProducer_Lifecycle_And_MessageProduction(t *testing.T) {
 	baseProjectID := "test-producer-project"
 	baseTopicID := "test-producer-output-topic"
 	testLogger := zerolog.Nop()
+	ctx := context.Background()
 
 	testCases := []struct {
 		name           string
@@ -154,7 +156,7 @@ func TestGooglePubsubProducer_Lifecycle_And_MessageProduction(t *testing.T) {
 			defer producerCancel()
 
 			producer, err := messagepipeline.NewGooglePubsubProducer[TestPayload](
-				pubsubClient, producerConfig, testLogger,
+				ctx, pubsubClient, producerConfig, testLogger,
 			)
 			require.NoError(t, err)
 

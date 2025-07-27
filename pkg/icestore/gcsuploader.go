@@ -125,7 +125,7 @@ func (u *GCSBatchUploader) uploadSingleGroup(ctx context.Context, batchKey strin
 	go func() {
 		var err error
 		defer func() {
-			pw.CloseWithError(err)
+			_ = pw.CloseWithError(err)
 		}()
 
 		gz := gzip.NewWriter(pw)
