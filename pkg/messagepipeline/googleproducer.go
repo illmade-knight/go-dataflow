@@ -25,8 +25,8 @@ type GooglePubsubProducerConfig struct {
 	AutoAckOnPublish       bool          // New: If true, producer calls original message's Ack/Nack callbacks based on publish result.
 }
 
-// NewGooglePubsubProducerConfig with default values for message processing
-func NewGooglePubsubProducerConfig() (*GooglePubsubProducerConfig, error) {
+// NewGooglePubsubProducerDefaults with default values for message processing
+func NewGooglePubsubProducerDefaults() *GooglePubsubProducerConfig {
 	cfg := &GooglePubsubProducerConfig{
 		BatchSize:              100,                    // Default Google Pub/Sub batch size
 		BatchDelay:             100 * time.Millisecond, // Default Google Pub/Sub batch delay
@@ -34,8 +34,11 @@ func NewGooglePubsubProducerConfig() (*GooglePubsubProducerConfig, error) {
 		AutoAckOnPublish:       false,                  // Default to false for production use (ProcessingService handles Ack/Nack)
 	}
 	if bs := os.Getenv("PUBSUB_PRODUCER_BATCH_SIZE"); bs != "" {
-		if val, err := strconv.Atoi(bs); err == nil {
+		val, err := strconv.Atoi(bs)
+		if err == nil {
 			cfg.BatchSize = val
+		} else {
+			log.Warn().Msg("PUBSUB_PRODUCER_BATCH_SIZE must be an integer, using default")
 		}
 	}
 	if bd := os.Getenv("PUBSUB_PRODUCER_BATCH_DELAY"); bd != "" {
@@ -47,17 +50,23 @@ func NewGooglePubsubProducerConfig() (*GooglePubsubProducerConfig, error) {
 		}
 	}
 	if icm := os.Getenv("PUBSUB_PRODUCER_INPUT_CHAN_MULTIPLIER"); icm != "" {
-		if val, err := strconv.Atoi(icm); err == nil {
+		val, err := strconv.Atoi(icm)
+		if err == nil {
 			cfg.InputChannelMultiplier = val
+		} else {
+			log.Warn().Msg("PUBSUB_PRODUCER_INPUT_CHAN_MULTIPLIER should be an integer, using default")
 		}
 	}
 	if autoAckStr := os.Getenv("PUBSUB_PRODUCER_AUTO_ACK_ON_PUBLISH"); autoAckStr != "" {
-		if val, err := strconv.ParseBool(autoAckStr); err == nil {
+		val, err := strconv.ParseBool(autoAckStr)
+		if err == nil {
 			cfg.AutoAckOnPublish = val
+		} else {
+			log.Warn().Err(err).Msg("PUBSUB_PRODUCER_AUTO_ACK_ON_PUBLISH should be bool")
 		}
 	}
 
-	return cfg, nil
+	return cfg
 }
 
 // GooglePubsubProducer implements MessageProcessor for publishing to Google Cloud Pub/Sub.

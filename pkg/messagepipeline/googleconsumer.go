@@ -22,12 +22,12 @@ type GooglePubsubConsumerConfig struct {
 }
 
 // NewGooglePubsubConsumerDefaults just supplies defaults for message handling
-func NewGooglePubsubConsumerDefaults() (*GooglePubsubConsumerConfig, error) {
+func NewGooglePubsubConsumerDefaults() *GooglePubsubConsumerConfig {
 	cfg := &GooglePubsubConsumerConfig{
 		MaxOutstandingMessages: 100,
 		NumGoroutines:          5,
 	}
-	return cfg, nil
+	return cfg
 }
 
 type GooglePubsubConsumer struct {
