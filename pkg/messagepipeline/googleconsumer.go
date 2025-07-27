@@ -21,10 +21,9 @@ type GooglePubsubConsumerConfig struct {
 	NumGoroutines          int
 }
 
-// LoadDefaultGooglePubsubConsumerConfig GooglePubsubConsumer will always need a sub
-func LoadDefaultGooglePubsubConsumerConfig(subID string) (*GooglePubsubConsumerConfig, error) {
+// NewGooglePubsubConsumerDefaults just supplies defaults for message handling
+func NewGooglePubsubConsumerDefaults() (*GooglePubsubConsumerConfig, error) {
 	cfg := &GooglePubsubConsumerConfig{
-		SubscriptionID:         subID,
 		MaxOutstandingMessages: 100,
 		NumGoroutines:          5,
 	}

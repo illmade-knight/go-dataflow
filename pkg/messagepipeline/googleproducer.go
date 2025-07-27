@@ -25,11 +25,9 @@ type GooglePubsubProducerConfig struct {
 	AutoAckOnPublish       bool          // New: If true, producer calls original message's Ack/Nack callbacks based on publish result.
 }
 
-// LoadGooglePubsubProducerConfig loads producer configuration from environment variables.
-// we can have multiple producers and we always need a topicID so pass it in
-func LoadGooglePubsubProducerConfig(topicID string) (*GooglePubsubProducerConfig, error) {
+// NewGooglePubsubProducerConfig with default values for message processing
+func NewGooglePubsubProducerConfig() (*GooglePubsubProducerConfig, error) {
 	cfg := &GooglePubsubProducerConfig{
-		TopicID:                topicID,
 		BatchSize:              100,                    // Default Google Pub/Sub batch size
 		BatchDelay:             100 * time.Millisecond, // Default Google Pub/Sub batch delay
 		InputChannelMultiplier: 2,                      // Default multiplier for input channel
