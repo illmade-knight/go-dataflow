@@ -3,7 +3,6 @@ package messagepipeline
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -26,23 +25,15 @@ type GooglePubsubProducerConfig struct {
 	AutoAckOnPublish       bool          // New: If true, producer calls original message's Ack/Nack callbacks based on publish result.
 }
 
-// LoadGooglePubsubProducerConfigFromEnv loads producer configuration from environment variables.
-func LoadGooglePubsubProducerConfigFromEnv() (*GooglePubsubProducerConfig, error) {
-	topicID := os.Getenv("PUBSUB_TOPIC_ID_ENRICHED_OUTPUT")
-
+// LoadGooglePubsubProducerConfig loads producer configuration from environment variables.
+// we can have multiple producers and we always need a topicID so pass it in
+func LoadGooglePubsubProducerConfig(topicID string) (*GooglePubsubProducerConfig, error) {
 	cfg := &GooglePubsubProducerConfig{
-		ProjectID:              os.Getenv("GCP_PROJECT_ID"),
 		TopicID:                topicID,
 		BatchSize:              100,                    // Default Google Pub/Sub batch size
 		BatchDelay:             100 * time.Millisecond, // Default Google Pub/Sub batch delay
 		InputChannelMultiplier: 2,                      // Default multiplier for input channel
 		AutoAckOnPublish:       false,                  // Default to false for production use (ProcessingService handles Ack/Nack)
-	}
-	if cfg.ProjectID == "" {
-		return nil, errors.New("GCP_PROJECT_ID environment variable not set for Pub/Sub producer")
-	}
-	if cfg.TopicID == "" {
-		return nil, errors.New("PUBSUB_TOPIC_ID_ENRICHED_OUTPUT environment variable not set for Pub/Sub producer")
 	}
 	if bs := os.Getenv("PUBSUB_PRODUCER_BATCH_SIZE"); bs != "" {
 		if val, err := strconv.Atoi(bs); err == nil {

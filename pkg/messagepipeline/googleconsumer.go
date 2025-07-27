@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"github.com/illmade-knight/go-dataflow/pkg/types"
 	"github.com/rs/zerolog"
-	"os"
 	"sync"
 	"time"
 )
@@ -22,18 +21,12 @@ type GooglePubsubConsumerConfig struct {
 	NumGoroutines          int
 }
 
-func LoadGooglePubsubConsumerConfigFromEnv() (*GooglePubsubConsumerConfig, error) {
-	subID := os.Getenv("PUBSUB_SUBSCRIPTION_ID_GARDEN_MONITOR_INPUT")
-
+// LoadDefaultGooglePubsubConsumerConfig GooglePubsubConsumer will always need a sub
+func LoadDefaultGooglePubsubConsumerConfig(subID string) (*GooglePubsubConsumerConfig, error) {
 	cfg := &GooglePubsubConsumerConfig{
-		ProjectID:              os.Getenv("GCP_PROJECT_ID"),
 		SubscriptionID:         subID,
-		CredentialsFile:        os.Getenv("GCP_PUBSUB_CREDENTIALS_FILE"),
 		MaxOutstandingMessages: 100,
 		NumGoroutines:          5,
-	}
-	if cfg.ProjectID == "" {
-		return nil, errors.New("GCP_PROJECT_ID environment variable not set for Pub/Sub consumer")
 	}
 	return cfg, nil
 }
