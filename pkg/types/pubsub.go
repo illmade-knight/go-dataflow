@@ -22,13 +22,8 @@ type PublishMessage struct {
 	Payload []byte
 	// PublishTime is the timestamp when the message was originally published.
 	PublishTime time.Time
-	// a pipeline can enrich data with more specific device data
-	DeviceInfo *DeviceInfo
-}
 
-type DeviceInfo struct {
-	Name       string `json:"name"`
-	UID        string `json:"uid"`
-	ServiceTag string `json:"serviceTag" bigquery:"service_tag"`
-	Location   string `json:"location"`
+	// REFACTORED: DeviceInfo has been replaced with a generic map to hold any
+	// kind of enrichment data, not just device-specific info.
+	EnrichmentData map[string]interface{} `json:"enrichmentData,omitempty"`
 }

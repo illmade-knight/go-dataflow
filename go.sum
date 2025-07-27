@@ -166,8 +166,6 @@ github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aN
 github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.1 h1:X5VWvz21y3gzm9Nw/kaUeku/1+uBhcekkmy4IkffJww=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.1/go.mod h1:Zanoh4+gvIgluNqcfMVTJueD4wSS5hT7zTt4Mrutd90=
-github.com/illmade-knight/go-iot v0.0.18 h1:SqmhUqmRAlimg306Bv1SVwRGc0FqAAqSXVtvHrAcKsQ=
-github.com/illmade-knight/go-iot v0.0.18/go.mod h1:4lE/VKQCIXxFwACGgi81xQhh5K8Xi75Unm/tTaifkHo=
 github.com/illmade-knight/go-test v0.0.1-beta h1:SSlaX1rqs4i6ZlqfFSW18Ydat9LfXzQurGiteIBZaYM=
 github.com/illmade-knight/go-test v0.0.1-beta/go.mod h1:/sfaRlG+JxbmKXYaDsHywiqUWzlAJcHzOMES0paxvvQ=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=

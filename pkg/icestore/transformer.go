@@ -14,9 +14,13 @@ func ArchivalTransformer(msg types.ConsumedMessage) (*ArchivalData, bool, error)
 	}
 	batchKey := fmt.Sprintf("%d/%02d/%02d", ts.Year(), ts.Month(), ts.Day())
 
-	//if the msg has been enriched in the pipeline we'll use its location in teh batchKey
-	if msg.DeviceInfo != nil {
-		batchKey = fmt.Sprintf("%s/%s", batchKey, msg.DeviceInfo.Location)
+	// REFACTORED: The transformer now looks for enrichment data in the generic
+	// EnrichmentData map instead of the old DeviceInfo struct.
+	if msg.EnrichmentData != nil {
+		// Safely access the location value using a type assertion.
+		if location, ok := msg.EnrichmentData["location"].(string); ok && location != "" {
+			batchKey = fmt.Sprintf("%s/%s", batchKey, location)
+		}
 	}
 
 	return &ArchivalData{

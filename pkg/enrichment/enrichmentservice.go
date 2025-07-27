@@ -13,7 +13,7 @@ import (
 // KeyExtractor defines a function to get the enrichment key from a message.
 type KeyExtractor[K any] func(msg types.ConsumedMessage) (K, bool)
 
-// Enricher defines a function to apply the fetched data to a message.
+// Enricher defines a function to apply the fetched data to a message's generic enrichment map.
 type Enricher[V any] func(msg *types.PublishMessage, data V)
 
 // NewEnrichmentTransformer creates a generic message transformer for data enrichment.
@@ -27,7 +27,6 @@ func NewEnrichmentTransformer[K comparable, V any](
 	return func(msg types.ConsumedMessage) (*types.PublishMessage, bool, error) {
 		handleFailure := func(reason string, key K) {
 			if deadLetterPublisher != nil {
-				// This could be improved to handle non-string keys
 				attributes := map[string]string{
 					"error":          reason,
 					"enrichment_key": fmt.Sprintf("%v", key),
@@ -44,7 +43,6 @@ func NewEnrichmentTransformer[K comparable, V any](
 			return nil, true, nil // Skip message
 		}
 
-		// Fetch the enrichment data using the generic fetcher
 		data, err := fetcher(context.Background(), key)
 		if err != nil {
 			logger.Error().Err(err).Msg("Failed to fetch enrichment data.")
@@ -52,15 +50,16 @@ func NewEnrichmentTransformer[K comparable, V any](
 			return nil, true, nil // Skip message
 		}
 
-		// Create the base message to be published
+		// Create the base message to be published.
+		// It now initializes an empty EnrichmentData map instead of copying DeviceInfo.
 		enrichedMsg := &types.PublishMessage{
-			ID:          msg.ID,
-			Payload:     msg.Payload,
-			PublishTime: msg.PublishTime,
-			DeviceInfo:  msg.DeviceInfo, // Copy original info
+			ID:             msg.ID,
+			Payload:        msg.Payload,
+			PublishTime:    msg.PublishTime,
+			EnrichmentData: make(map[string]interface{}), // Initialize the generic map
 		}
 
-		// Apply the enrichment
+		// The provided enricher function is now responsible for populating the EnrichmentData map.
 		enricher(enrichedMsg, data)
 
 		logger.Debug().Str("msg_id", msg.ID).Msg("Message enriched successfully.")

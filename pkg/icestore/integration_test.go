@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/illmade-knight/go-iot/pkg/icestore"
-	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
+	"github.com/illmade-knight/go-dataflow/pkg/icestore"
+	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-test/emulators"
 
 	"cloud.google.com/go/pubsub"
