@@ -1,0 +1,127 @@
+// mqttconverter/mqtt_integration_test.go
+//go:build integration
+
+package mqttconverter_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"testing"
+	"time"
+
+	"cloud.google.com/go/pubsub"
+	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
+	"github.com/illmade-knight/go-dataflow/pkg/mqttconverter"
+	"github.com/illmade-knight/go-test/emulators"
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestMqttPipeline_Integration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
+
+	logger := zerolog.New(os.Stderr).Level(zerolog.InfoLevel)
+	const (
+		projectID     = "test-project"
+		outputTopicID = "processed-topic"
+		outputSubID   = "processed-sub"
+		mqttTopic     = "devices/+/data"
+	)
+
+	// --- 1. Setup Emulators ---
+	mqttConnection := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
+	pubsubConnection := emulators.SetupPubsubEmulator(t, ctx, emulators.GetDefaultPubsubConfig(projectID, map[string]string{outputTopicID: outputSubID}))
+
+	// --- 2. Create Pipeline Components ---
+	psClient, err := pubsub.NewClient(ctx, projectID, pubsubConnection.ClientOptions...)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = psClient.Close() })
+
+	mqttCfg := mqttconverter.LoadMQTTClientConfigFromEnv()
+	mqttCfg.BrokerURL = mqttConnection.EmulatorAddress
+	mqttCfg.Topic = mqttTopic
+	mqttCfg.ClientIDPrefix = "ingestion-test-"
+
+	// FIX: The test now creates the Paho MQTT client, which will be injected into the consumer.
+	mqttOpts := mqtt.NewClientOptions().
+		AddBroker(mqttCfg.BrokerURL).
+		SetClientID(mqttCfg.ClientIDPrefix + "consumer").
+		SetConnectTimeout(mqttCfg.ConnectTimeout).
+		SetAutoReconnect(true)
+	pahoClient := mqtt.NewClient(mqttOpts)
+
+	// Create our new MqttConsumer, injecting the client.
+	consumer, err := mqttconverter.NewMqttConsumer(pahoClient, mqttCfg, logger)
+	require.NoError(t, err)
+
+	// Create a standard Pub/Sub producer for the output
+	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
+	producerCfg.ProjectID = projectID
+	producerCfg.TopicID = outputTopicID
+	producer, err := messagepipeline.NewGooglePubsubProducer[mqttconverter.RawMessage](ctx, producerCfg, psClient, logger)
+	require.NoError(t, err)
+
+	// --- 3. Assemble the ProcessingService ---
+	service, err := messagepipeline.NewProcessingService[mqttconverter.RawMessage](
+		5, // Number of workers
+		consumer,
+		producer,
+		mqttconverter.ToRawMessageTransformer,
+		logger,
+	)
+	require.NoError(t, err)
+
+	// --- 4. Start the Service and Test Clients ---
+	serviceCtx, serviceCancel := context.WithCancel(ctx)
+	t.Cleanup(serviceCancel)
+	go func() { _ = service.Start(serviceCtx) }()
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		service.Stop(stopCtx)
+	})
+
+	mqttTestPubClient, err := emulators.CreateTestMqttPublisher(mqttConnection.EmulatorAddress, "test-publisher-main")
+	require.NoError(t, err)
+	t.Cleanup(func() { mqttTestPubClient.Disconnect(250) })
+
+	processedSub := psClient.Subscription(outputSubID)
+
+	// --- 5. Publish Test Message and Verify ---
+	devicePayload := map[string]interface{}{"value": 42, "status": "ok"}
+	msgBytes, err := json.Marshal(devicePayload)
+	require.NoError(t, err)
+
+	publishTopic := "devices/test-eui-001/data"
+	token := mqttTestPubClient.Publish(publishTopic, 1, false, msgBytes)
+	require.True(t, token.WaitTimeout(10*time.Second), "MQTT Publish token timed out")
+	require.NoError(t, token.Error(), "MQTT Publish failed")
+
+	// --- Verification ---
+	pullCtx, pullCancel := context.WithTimeout(ctx, 30*time.Second)
+	t.Cleanup(pullCancel)
+
+	var receivedMsg *pubsub.Message
+	err = processedSub.Receive(pullCtx, func(ctxMsg context.Context, msg *pubsub.Message) {
+		msg.Ack()
+		receivedMsg = msg
+		pullCancel() // Stop receiving after the first message
+	})
+
+	if err != nil && !errors.Is(err, context.Canceled) {
+		require.NoError(t, err, "Receiving from Pub/Sub failed")
+	}
+	require.NotNil(t, receivedMsg, "Did not receive a message from Pub/Sub")
+
+	var result mqttconverter.RawMessage
+	err = json.Unmarshal(receivedMsg.Data, &result)
+	require.NoError(t, err)
+
+	assert.Equal(t, publishTopic, result.Topic)
+	assert.JSONEq(t, string(msgBytes), string(result.Payload))
+}
