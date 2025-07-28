@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"cloud.google.com/go/pubsub"
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-dataflow/pkg/mqttconverter"
 	"github.com/illmade-knight/go-test/emulators"
@@ -47,19 +46,11 @@ func TestMqttPipeline_Integration(t *testing.T) {
 	mqttCfg.Topic = mqttTopic
 	mqttCfg.ClientIDPrefix = "ingestion-test-"
 
-	// FIX: The test now creates the Paho MQTT client, which will be injected into the consumer.
-	mqttOpts := mqtt.NewClientOptions().
-		AddBroker(mqttCfg.BrokerURL).
-		SetClientID(mqttCfg.ClientIDPrefix + "consumer").
-		SetConnectTimeout(mqttCfg.ConnectTimeout).
-		SetAutoReconnect(true)
-	pahoClient := mqtt.NewClient(mqttOpts)
-
-	// Create our new MqttConsumer, injecting the client.
-	consumer, err := mqttconverter.NewMqttConsumer(pahoClient, mqttCfg, logger)
+	// The consumer is now self-contained and creates its own Paho client.
+	consumer, err := mqttconverter.NewMqttConsumer(mqttCfg, logger)
 	require.NoError(t, err)
 
-	// Create a standard Pub/Sub producer for the output
+	// Create a standard Pub/Sub producer for the output.
 	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
 	producerCfg.ProjectID = projectID
 	producerCfg.TopicID = outputTopicID
