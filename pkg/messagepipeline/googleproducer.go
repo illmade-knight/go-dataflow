@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"strconv"
 	"sync"
 	"time"
 
@@ -28,8 +26,9 @@ type GooglePubsubProducerConfig struct {
 }
 
 // NewGooglePubsubProducerDefaults provides a config with sensible defaults.
-func NewGooglePubsubProducerDefaults() *GooglePubsubProducerConfig {
+func NewGooglePubsubProducerDefaults(projectID string) *GooglePubsubProducerConfig {
 	cfg := &GooglePubsubProducerConfig{
+		ProjectID:              projectID,
 		BatchSize:              100,
 		BatchDelay:             100 * time.Millisecond,
 		InputChannelMultiplier: 2,
@@ -37,27 +36,6 @@ func NewGooglePubsubProducerDefaults() *GooglePubsubProducerConfig {
 		// REFACTOR: Set defaults for the new timeout configurations.
 		TopicExistsTimeout:         15 * time.Second,
 		PublishConfirmationTimeout: 20 * time.Second,
-	}
-	// The following logic allows for overriding defaults via environment variables.
-	if bs := os.Getenv("PUBSUB_PRODUCER_BATCH_SIZE"); bs != "" {
-		if val, err := strconv.Atoi(bs); err == nil {
-			cfg.BatchSize = val
-		}
-	}
-	if bd := os.Getenv("PUBSUB_PRODUCER_BATCH_DELAY"); bd != "" {
-		if val, err := time.ParseDuration(bd); err == nil {
-			cfg.BatchDelay = val
-		}
-	}
-	if icm := os.Getenv("PUBSUB_PRODUCER_INPUT_CHAN_MULTIPLIER"); icm != "" {
-		if val, err := strconv.Atoi(icm); err == nil {
-			cfg.InputChannelMultiplier = val
-		}
-	}
-	if autoAckStr := os.Getenv("PUBSUB_PRODUCER_AUTO_ACK_ON_PUBLISH"); autoAckStr != "" {
-		if val, err := strconv.ParseBool(autoAckStr); err == nil {
-			cfg.AutoAckOnPublish = val
-		}
 	}
 	return cfg
 }

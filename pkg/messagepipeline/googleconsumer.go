@@ -26,11 +26,11 @@ type GooglePubsubConsumerConfig struct {
 }
 
 // NewGooglePubsubConsumerDefaults provides a config with sensible defaults.
-func NewGooglePubsubConsumerDefaults() *GooglePubsubConsumerConfig {
+func NewGooglePubsubConsumerDefaults(projectID string) *GooglePubsubConsumerConfig {
 	return &GooglePubsubConsumerConfig{
-		MaxOutstandingMessages: 100,
-		NumGoroutines:          5,
-		// REFACTOR: Set a default for the new timeout configuration.
+		ProjectID:                 projectID,
+		MaxOutstandingMessages:    100,
+		NumGoroutines:             5,
 		SubscriptionExistsTimeout: 20 * time.Second,
 	}
 }

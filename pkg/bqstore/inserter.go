@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/rs/zerolog"
@@ -18,26 +17,6 @@ type BigQueryDatasetConfig struct {
 	DatasetID       string
 	TableID         string
 	CredentialsFile string // Optional: Path to a service account JSON file.
-}
-
-// LoadBigQueryInserterConfigFromEnv loads BigQuery configuration from environment variables.
-func LoadBigQueryInserterConfigFromEnv() (*BigQueryDatasetConfig, error) {
-	cfg := &BigQueryDatasetConfig{
-		ProjectID:       os.Getenv("GCP_PROJECT_ID"),
-		DatasetID:       os.Getenv("BQ_DATASET_ID"),
-		TableID:         os.Getenv("BQ_TABLE_ID"),
-		CredentialsFile: os.Getenv("GCP_BQ_CREDENTIALS_FILE"),
-	}
-	if cfg.ProjectID == "" {
-		return nil, fmt.Errorf("GCP_PROJECT_ID environment variable not set")
-	}
-	if cfg.DatasetID == "" {
-		return nil, fmt.Errorf("BQ_DATASET_ID environment variable not set")
-	}
-	if cfg.TableID == "" {
-		return nil, fmt.Errorf("BQ_TABLE_ID environment variable not set")
-	}
-	return cfg, nil
 }
 
 // NewProductionBigQueryClient creates a BigQuery client suitable for production environments.
