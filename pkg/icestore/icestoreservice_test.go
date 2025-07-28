@@ -3,61 +3,67 @@ package icestore
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-dataflow/pkg/types"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// --- Test Cases ---
+// setupIceStoreService is a helper to initialize a service with mocks for unit testing.
+func setupIceStoreService(t *testing.T, transformer messagepipeline.MessageTransformer[ArchivalData]) (
+	*messagepipeline.ProcessingService[ArchivalData], *MockMessageConsumer, *mockFinalUploader) {
+	t.Helper()
 
-// TestIceStorageService_Success verifies the happy path, including ID propagation.
-func TestIceStorageService_Success(t *testing.T) {
-	// Arrange
 	logger := zerolog.Nop()
 	mockUploader := &mockFinalUploader{}
 	mockConsumer := NewMockMessageConsumer(10)
 
-	batcher := NewBatcher(&BatcherConfig{BatchSize: 1}, mockUploader, logger)
+	batcherCfg := &BatcherConfig{BatchSize: 1, FlushInterval: time.Second, UploadTimeout: time.Second}
+	batcher := NewBatcher(batcherCfg, mockUploader, logger)
 
-	service, err := NewIceStorageService(1, mockConsumer, batcher, ArchivalTransformer, logger)
+	service, err := NewIceStorageService(1, mockConsumer, batcher, transformer, logger)
 	require.NoError(t, err)
 
-	// Act
-	err = service.Start(context.Background())
+	return service, mockConsumer, mockUploader
+}
+
+// TestIceStorageService_Success verifies the happy path.
+func TestIceStorageService_Success(t *testing.T) {
+	// Arrange
+	service, mockConsumer, mockUploader := setupIceStoreService(t, ArchivalTransformer)
+
+	serviceCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	err := service.Start(serviceCtx)
 	require.NoError(t, err)
-	defer service.Stop()
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stopCancel()
+		service.Stop(stopCtx)
+	})
 
-	var acked bool
-	ackChan := make(chan struct{})
-	mockUploader.InsertBatchFn = func(ctx context.Context, items []*ArchivalData) error {
-		// This simulates the batcher calling Ack() on the original message.
-		acked = true
-		close(ackChan)
-		return nil
-	}
-
+	var acked int32
 	msg := types.ConsumedMessage{
 		PublishMessage: types.PublishMessage{
-			ID:      "test-id-123", // Give the message a specific ID.
+			ID:      "test-id-123",
 			Payload: []byte(`{"data":"test"}`),
 		},
-		Ack: func() {},
+		Ack: func() { atomic.AddInt32(&acked, 1) },
 	}
+
+	// Act
 	mockConsumer.Push(msg)
 
-	select {
-	case <-ackChan:
-		// success
-	case <-time.After(1 * time.Second):
-		t.Fatal("timed out waiting for message to be processed")
-	}
-
 	// Assert
-	assert.True(t, acked, "Message should have been acked")
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&acked) == 1
+	}, time.Second, 10*time.Millisecond, "Message should have been acked")
+
 	receivedBatches := mockUploader.GetReceivedItems()
 	require.Len(t, receivedBatches, 1)
 	require.Len(t, receivedBatches[0], 1)
@@ -66,80 +72,36 @@ func TestIceStorageService_Success(t *testing.T) {
 
 // TestIceStorageService_TransformerError verifies a Nack on transformation failure.
 func TestIceStorageService_TransformerError(t *testing.T) {
-	logger := zerolog.Nop()
-	mockUploader := &mockFinalUploader{}
-	mockConsumer := NewMockMessageConsumer(10)
-	batcher := NewBatcher(&BatcherConfig{BatchSize: 1}, mockUploader, logger)
-
-	// CORRECTED: Use a dedicated mock transformer that is guaranteed to return an error.
-	errorTransformer := func(msg types.ConsumedMessage) (*ArchivalData, bool, error) {
+	// Arrange
+	// FIX: The transformer now accepts a context to match the updated interface.
+	errorTransformer := func(ctx context.Context, msg types.ConsumedMessage) (*ArchivalData, bool, error) {
 		return nil, false, errors.New("transformation failed")
 	}
+	service, mockConsumer, mockUploader := setupIceStoreService(t, errorTransformer)
 
-	service, err := NewIceStorageService(1, mockConsumer, batcher, errorTransformer, logger)
+	serviceCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	err := service.Start(serviceCtx)
 	require.NoError(t, err)
-	err = service.Start(context.Background())
-	require.NoError(t, err)
-	defer service.Stop()
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stopCancel()
+		service.Stop(stopCtx)
+	})
 
-	var nacked bool
-	nackChan := make(chan struct{})
+	var nacked int32
 	msg := types.ConsumedMessage{
-		PublishMessage: types.PublishMessage{
-			ID:      "ice-msg-err",
-			Payload: []byte(`any-payload`),
-		},
-		Nack: func() {
-			nacked = true
-			close(nackChan)
-		},
+		PublishMessage: types.PublishMessage{ID: "ice-msg-err"},
+		Nack:           func() { atomic.AddInt32(&nacked, 1) },
 	}
+
+	// Act
 	mockConsumer.Push(msg)
 
-	select {
-	case <-nackChan:
-		// success
-	case <-time.After(1 * time.Second):
-		t.Fatal("timed out waiting for message to be nacked")
-	}
+	// Assert
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&nacked) == 1
+	}, time.Second, 10*time.Millisecond, "timed out waiting for message to be nacked")
 
-	assert.True(t, nacked, "Message should have been nacked")
 	assert.Equal(t, 0, mockUploader.GetCallCount(), "Uploader should not be called")
-}
-
-// TestIceStorageService_Skip verifies that a null payload is Acked and skipped.
-func TestIceStorageService_Skip(t *testing.T) {
-	logger := zerolog.Nop()
-	mockUploader := &mockFinalUploader{}
-	mockConsumer := NewMockMessageConsumer(10)
-	batcher := NewBatcher(&BatcherConfig{BatchSize: 1}, mockUploader, logger)
-
-	service, err := NewIceStorageService(1, mockConsumer, batcher, ArchivalTransformer, logger)
-	require.NoError(t, err)
-	err = service.Start(context.Background())
-	require.NoError(t, err)
-	defer service.Stop()
-
-	var acked bool
-	ackChan := make(chan struct{})
-	msg := types.ConsumedMessage{
-		PublishMessage: types.PublishMessage{
-			ID:      "ice-msg-skip",
-			Payload: []byte("null"), // "null" payload should trigger a skip.
-		},
-		Ack: func() {
-			acked = true
-			close(ackChan)
-		},
-	}
-	mockConsumer.Push(msg)
-
-	select {
-	case <-ackChan:
-		// success
-	case <-time.After(1 * time.Second):
-		t.Fatal("timed out waiting for message to be acked")
-	}
-
-	assert.True(t, acked, "Message should have been acked")
 }

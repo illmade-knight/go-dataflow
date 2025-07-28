@@ -1,4 +1,4 @@
-// enrichment/enrichment.go
+// enrichment/fetcher.go
 package enrichment
 
 import (
@@ -20,16 +20,22 @@ type SourceFetcher[K any, V any] interface {
 }
 
 // CachedFetcher is a generic interface for a caching layer.
-// This interface is compatible with the one in your new 'cache' package.
 type CachedFetcher[K any, V any] interface {
 	FetchFromCache(ctx context.Context, key K) (V, error)
 	WriteToCache(ctx context.Context, key K, value V) error
 	io.Closer
 }
 
+// REFACTOR: Added a config struct for the fetcher.
+// FetcherConfig holds configuration for the cache-fallback fetcher.
+type FetcherConfig struct {
+	CacheWriteTimeout time.Duration
+}
+
 // NewCacheFallbackFetcher creates a generic Fetcher that uses a cache-then-source strategy.
+// REFACTOR: The constructor no longer accepts a parentCtx.
 func NewCacheFallbackFetcher[K comparable, V any](
-	parentCtx context.Context,
+	cfg *FetcherConfig,
 	cacheFetcher CachedFetcher[K, V],
 	sourceFetcher SourceFetcher[K, V],
 	logger zerolog.Logger,
@@ -49,7 +55,6 @@ func NewCacheFallbackFetcher[K comparable, V any](
 			logger.Debug().Msg("Cache hit.")
 			return value, nil
 		}
-		// We assume any error from cache means miss for simplicity, but you could add specific error checking.
 		logger.Debug().Err(err).Msg("Cache miss. Falling back to source.")
 
 		// 2. Cache miss, fallback to source
@@ -60,14 +65,16 @@ func NewCacheFallbackFetcher[K comparable, V any](
 		}
 		logger.Debug().Msg("Source hit. Writing back to cache.")
 
-		// 3. Source hit, write back to cache in the background
-		go func(bgCtx context.Context, k K, v V) {
-			writeCtx, cancel := context.WithTimeout(bgCtx, 5*time.Second)
+		// 3. Source hit, write back to cache in the background.
+		// REFACTOR: The goroutine is now parented by context.Background to make it a
+		// true fire-and-forget operation, independent of any single request.
+		go func(k K, v V) {
+			writeCtx, cancel := context.WithTimeout(context.Background(), cfg.CacheWriteTimeout)
 			defer cancel()
 			if writeErr := cacheFetcher.WriteToCache(writeCtx, k, v); writeErr != nil {
 				logger.Error().Err(writeErr).Msg("Failed to write to cache in background.")
 			}
-		}(parentCtx, key, value) // Use the parentCtx for the background routine's lifetime
+		}(key, value)
 
 		return value, nil
 	}

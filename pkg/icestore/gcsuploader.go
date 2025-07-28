@@ -14,11 +14,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// ====================================================================================
-// This file contains the Google Cloud Storage uploader.
-// REFACTORED: It is no longer generic and works specifically with ArchivalData.
-// ====================================================================================
-
 // GCSBatchUploaderConfig holds configuration specific to the GCS uploader.
 type GCSBatchUploaderConfig struct {
 	BucketName   string
@@ -26,7 +21,7 @@ type GCSBatchUploaderConfig struct {
 }
 
 // GCSBatchUploader implements the DataUploader interface for ArchivalData.
-// It is no longer generic, simplifying its structure.
+// It groups items by their batch key and uploads each group to a compressed file in GCS.
 type GCSBatchUploader struct {
 	client GCSClient
 	config GCSBatchUploaderConfig
@@ -35,7 +30,6 @@ type GCSBatchUploader struct {
 }
 
 // NewGCSBatchUploader creates a new uploader configured for Google Cloud Storage.
-// The generic constraint has been removed.
 func NewGCSBatchUploader(
 	gcsClient GCSClient,
 	config GCSBatchUploaderConfig,
@@ -55,8 +49,7 @@ func NewGCSBatchUploader(
 }
 
 // UploadBatch takes a batch of ArchivalData items, groups them by their key,
-// and uploads each group to a separate, compressed GCS object.
-// The type is now explicitly []*ArchivalData.
+// and uploads each group to a separate, compressed GCS object in parallel.
 func (u *GCSBatchUploader) UploadBatch(ctx context.Context, items []*ArchivalData) error {
 	if len(items) == 0 {
 		return nil
@@ -64,19 +57,16 @@ func (u *GCSBatchUploader) UploadBatch(ctx context.Context, items []*ArchivalDat
 
 	groupedBatches := make(map[string][]*ArchivalData)
 	for _, item := range items {
-		if item == nil {
-			continue
+		if item != nil {
+			key := item.GetBatchKey()
+			if key != "" {
+				groupedBatches[key] = append(groupedBatches[key], item)
+			}
 		}
-		key := item.GetBatchKey() // Directly call the method on ArchivalData.
-		if key == "" {
-			u.logger.Warn().Msg("item has an empty BatchKey, skipping.")
-			continue
-		}
-		groupedBatches[key] = append(groupedBatches[key], item)
 	}
 
 	if len(groupedBatches) == 0 {
-		return nil
+		return nil // All items were nil or had empty keys.
 	}
 
 	var uploadWg sync.WaitGroup
@@ -84,7 +74,7 @@ func (u *GCSBatchUploader) UploadBatch(ctx context.Context, items []*ArchivalDat
 
 	for key, batchData := range groupedBatches {
 		uploadWg.Add(1)
-		u.wg.Add(1)
+		u.wg.Add(1) // Add to the main waitgroup for the Close method.
 
 		go func(batchKey string, dataToUpload []*ArchivalData) {
 			defer uploadWg.Done()
@@ -111,41 +101,32 @@ func (u *GCSBatchUploader) UploadBatch(ctx context.Context, items []*ArchivalDat
 
 // uploadSingleGroup handles writing one group of records to a GCS object.
 func (u *GCSBatchUploader) uploadSingleGroup(ctx context.Context, batchKey string, batchData []*ArchivalData) error {
-	if len(batchData) == 0 {
-		return nil
-	}
 	batchFileID := uuid.New().String()
 	objectName := path.Join(u.config.ObjectPrefix, batchKey, fmt.Sprintf("%s.jsonl.gz", batchFileID))
-	u.logger.Info().Str("object_name", objectName).Int("message_count", len(batchData)).Msg("Starting upload for grouped batch")
+	u.logger.Info().Str("object_name", objectName).Int("record_count", len(batchData)).Msg("Starting upload for grouped batch.")
 
 	objHandle := u.client.Bucket(u.config.BucketName).Object(objectName)
 	gcsWriter := objHandle.NewWriter(ctx)
 	pr, pw := io.Pipe()
 
+	// This goroutine encodes and compresses the data, writing it to a pipe.
 	go func() {
 		var err error
-		defer func() {
-			_ = pw.CloseWithError(err)
-		}()
-
+		defer func() { _ = pw.CloseWithError(err) }()
 		gz := gzip.NewWriter(pw)
+		defer func() { _ = gz.Close() }()
 		enc := json.NewEncoder(gz)
-
 		for _, rec := range batchData {
 			if err = enc.Encode(rec); err != nil {
 				err = fmt.Errorf("json encoding failed for %s: %w", objectName, err)
 				return
 			}
 		}
-
-		if err = gz.Close(); err != nil {
-			err = fmt.Errorf("gzip writer close failed for %s: %w", objectName, err)
-			return
-		}
 	}()
 
+	// This reads from the pipe and streams the data to the GCS writer.
 	bytesWritten, pipeReadErr := io.Copy(gcsWriter, pr)
-	closeErr := gcsWriter.Close()
+	closeErr := gcsWriter.Close() // This finalizes the GCS upload.
 
 	if pipeReadErr != nil {
 		return fmt.Errorf("failed to stream data for GCS object %s: %w", objectName, pipeReadErr)
@@ -157,11 +138,12 @@ func (u *GCSBatchUploader) uploadSingleGroup(ctx context.Context, batchKey strin
 	u.logger.Info().
 		Str("object_name", objectName).
 		Int64("bytes_written", bytesWritten).
-		Msg("Successfully uploaded grouped batch to GCS")
+		Msg("Successfully uploaded grouped batch to GCS.")
 	return nil
 }
 
-// Close waits for any pending upload goroutines to complete.
+// Close waits for any pending upload goroutines to complete. Its blocking nature
+// is handled by the timeout context in the calling Batcher's Stop method.
 func (u *GCSBatchUploader) Close() error {
 	u.logger.Info().Msg("Waiting for all pending GCS uploads to complete...")
 	u.wg.Wait()

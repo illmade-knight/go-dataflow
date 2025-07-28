@@ -10,8 +10,7 @@ import (
 // ====================================================================================
 // This file defines a set of interfaces to abstract the Google Cloud Storage client.
 // This abstraction allows the GCSBatchUploader to be tested without needing a real
-// GCS client, improving unit test quality and speed. The pattern is adapted from
-// the original gcsdataarchiver.go.
+// GCS client, improving unit test quality and speed.
 // ====================================================================================
 
 // --- GCS Client Abstraction Interfaces ---

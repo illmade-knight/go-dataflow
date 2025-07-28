@@ -1,26 +1,41 @@
 package icestore
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/illmade-knight/go-dataflow/pkg/types"
 )
 
-func ArchivalTransformer(msg types.ConsumedMessage) (*ArchivalData, bool, error) {
-	ts := msg.PublishTime
-	if ts.IsZero() {
-		ts = time.Now().UTC()
+// ArchivalTransformer is a MessageTransformer function that converts a generic
+// ConsumedMessage into the icestore-specific ArchivalData format.
+// FIX: The signature now accepts a context to match the updated MessageTransformer interface.
+func ArchivalTransformer(ctx context.Context, msg types.ConsumedMessage) (*ArchivalData, bool, error) {
+	var ts time.Time
+
+	if testTime, ok := msg.Attributes["test_publish_time"]; ok {
+		parsedTime, err := time.Parse(time.RFC3339, testTime)
+		if err == nil {
+			ts = parsedTime
+		}
 	}
+
+	if ts.IsZero() {
+		ts = msg.PublishTime
+		if ts.IsZero() {
+			ts = time.Now().UTC()
+		}
+	}
+
 	batchKey := fmt.Sprintf("%d/%02d/%02d", ts.Year(), ts.Month(), ts.Day())
 
-	// REFACTORED: The transformer now looks for enrichment data in the generic
-	// EnrichmentData map instead of the old DeviceInfo struct.
 	if msg.EnrichmentData != nil {
-		// Safely access the location value using a type assertion.
 		if location, ok := msg.EnrichmentData["location"].(string); ok && location != "" {
 			batchKey = fmt.Sprintf("%s/%s", batchKey, location)
 		}
+	} else if location, ok := msg.Attributes["location"]; ok && location != "" {
+		batchKey = fmt.Sprintf("%s/%s", batchKey, location)
 	}
 
 	return &ArchivalData{

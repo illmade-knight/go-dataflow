@@ -13,23 +13,30 @@ import (
 
 // --- Google Cloud Pub/Sub Consumer Implementation ---
 
+// GooglePubsubConsumerConfig holds all configuration for the GooglePubsubConsumer.
 type GooglePubsubConsumerConfig struct {
 	ProjectID              string
 	SubscriptionID         string
-	CredentialsFile        string // Optional
 	MaxOutstandingMessages int
 	NumGoroutines          int
+	// REFACTOR: Added a configurable timeout for the initial subscription check.
+	// SubscriptionExistsTimeout specifies how long to wait when checking for the
+	// subscription's existence on startup. Defaults to 20 seconds.
+	SubscriptionExistsTimeout time.Duration
 }
 
-// NewGooglePubsubConsumerDefaults just supplies defaults for message handling
+// NewGooglePubsubConsumerDefaults provides a config with sensible defaults.
 func NewGooglePubsubConsumerDefaults() *GooglePubsubConsumerConfig {
-	cfg := &GooglePubsubConsumerConfig{
+	return &GooglePubsubConsumerConfig{
 		MaxOutstandingMessages: 100,
 		NumGoroutines:          5,
+		// REFACTOR: Set a default for the new timeout configuration.
+		SubscriptionExistsTimeout: 20 * time.Second,
 	}
-	return cfg
 }
 
+// GooglePubsubConsumer is a message pipeline consumer that receives messages
+// from a Google Cloud Pub/Sub subscription.
 type GooglePubsubConsumer struct {
 	client             *pubsub.Client
 	subscription       *pubsub.Subscription
@@ -41,14 +48,23 @@ type GooglePubsubConsumer struct {
 	doneChan           chan struct{}
 }
 
+// NewGooglePubsubConsumer creates and validates a new consumer for a Google Cloud
+// Pub/Sub subscription. It checks if the subscription exists before returning.
+// The provided context governs the entire initialization, including the existence check.
 func NewGooglePubsubConsumer(ctx context.Context, cfg *GooglePubsubConsumerConfig, client *pubsub.Client, logger zerolog.Logger) (*GooglePubsubConsumer, error) {
 	sub := client.Subscription(cfg.SubscriptionID)
 
-	subContext, cancel := context.WithTimeout(ctx, 20*time.Second)
+	// Use a derived context with the configured timeout for the existence check.
+	// REFACTOR: Use the configurable timeout from the config struct.
+	subCtx, cancel := context.WithTimeout(ctx, cfg.SubscriptionExistsTimeout)
 	defer cancel()
-	e, err := sub.Exists(subContext)
-	if !e || err != nil {
-		return nil, fmt.Errorf("subscription %s does not exist: %w", cfg.SubscriptionID, err)
+
+	exists, err := sub.Exists(subCtx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check for subscription %s: %w", cfg.SubscriptionID, err)
+	}
+	if !exists {
+		return nil, fmt.Errorf("subscription %s does not exist", cfg.SubscriptionID)
 	}
 	logger.Info().Str("subscription_id", cfg.SubscriptionID).Msg("Listening for messages")
 
@@ -63,26 +79,32 @@ func NewGooglePubsubConsumer(ctx context.Context, cfg *GooglePubsubConsumerConfi
 		doneChan:     make(chan struct{}),
 	}, nil
 }
-func (c *GooglePubsubConsumer) Messages() <-chan types.ConsumedMessage { return c.outputChan }
+
+// Messages returns the read-only channel where consumed messages are sent.
+func (c *GooglePubsubConsumer) Messages() <-chan types.ConsumedMessage {
+	return c.outputChan
+}
+
+// Start begins the message consumption process. It starts a background goroutine
+// to receive messages from Pub/Sub. The provided context manages the lifecycle
+// of this goroutine.
 func (c *GooglePubsubConsumer) Start(ctx context.Context) error {
 	c.logger.Info().Msg("Starting Pub/Sub message consumption...")
 	receiveCtx, cancel := context.WithCancel(ctx)
-	c.cancelSubscription = cancel
+	c.cancelSubscription = cancel // Store the cancel function to be called by Stop().
+
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
 		defer close(c.outputChan)
 		defer close(c.doneChan)
-		defer c.logger.Info().Msg("Pub/Sub Receive goroutine stopped.")
+		c.logger.Info().Msg("Pub/Sub Receive goroutine stopped.")
 
 		c.logger.Info().Msg("Pub/Sub Receive goroutine started.")
 		err := c.subscription.Receive(receiveCtx, func(ctx context.Context, msg *pubsub.Message) {
 			payloadCopy := make([]byte, len(msg.Data))
 			copy(payloadCopy, msg.Data)
 
-			// REFACTORED: The consumer no longer creates DeviceInfo. It just passes
-			// the message and its attributes along. The enrichment service is now
-			// solely responsible for interpreting attributes.
 			consumedMsg := types.ConsumedMessage{
 				PublishMessage: types.PublishMessage{
 					ID:          msg.ID,
@@ -96,30 +118,49 @@ func (c *GooglePubsubConsumer) Start(ctx context.Context) error {
 
 			select {
 			case c.outputChan <- consumedMsg:
+				// Message successfully sent to the processing pipeline.
 			case <-receiveCtx.Done():
+				// The consumer is stopping; Nack the message so it can be redelivered later.
 				msg.Nack()
-				c.logger.Warn().Str("msg_id", msg.ID).Msg("Consumer stopping, Nacking message due to receive context done.")
+				c.logger.Warn().Str("msg_id", msg.ID).Msg("Consumer stopping, Nacking message.")
 			}
 		})
+
+		// A Canceled error is expected on graceful shutdown, so we don't log it as an error.
 		if err != nil && !errors.Is(err, context.Canceled) {
-			c.logger.Error().Err(err).Msg("Pub/Sub Receive call exited with error")
+			c.logger.Error().Err(err).Msg("Pub/Sub Receive call exited with an unexpected error")
 		}
 	}()
 	return nil
 }
-func (c *GooglePubsubConsumer) Stop() error {
+
+// Stop gracefully shuts down the consumer. It signals the receiver to stop and
+// waits for it to finish, respecting the timeout from the provided context.
+// REFACTOR: The Stop method now accepts a context and returns an error.
+func (c *GooglePubsubConsumer) Stop(ctx context.Context) error {
+	// Trigger the shutdown process only once.
 	c.stopOnce.Do(func() {
 		c.logger.Info().Msg("Stopping Pub/Sub consumer...")
 		if c.cancelSubscription != nil {
+			// This cancels the context passed to the subscription.Receive loop,
+			// causing it to return.
 			c.cancelSubscription()
 		}
-		select {
-		case <-c.doneChan:
-			c.logger.Info().Msg("Pub/Sub Receive goroutine confirmed stopped.")
-		case <-time.After(30 * time.Second):
-			c.logger.Error().Msg("Timeout waiting for Pub/Sub Receive goroutine to stop.")
-		}
 	})
-	return nil
+
+	// Wait for the shutdown to complete, respecting the caller's timeout.
+	select {
+	case <-c.doneChan:
+		c.logger.Info().Msg("Pub/Sub consumer confirmed stopped.")
+		return nil
+	case <-ctx.Done():
+		c.logger.Error().Msg("Timeout waiting for Pub/Sub consumer to stop gracefully.")
+		return ctx.Err()
+	}
 }
-func (c *GooglePubsubConsumer) Done() <-chan struct{} { return c.doneChan }
+
+// Done returns a channel that is closed when the consumer has fully stopped.
+// This is useful for orchestrating graceful shutdowns.
+func (c *GooglePubsubConsumer) Done() <-chan struct{} {
+	return c.doneChan
+}

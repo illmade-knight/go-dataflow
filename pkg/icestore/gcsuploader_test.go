@@ -18,13 +18,12 @@ import (
 
 func TestGCSBatchUploader_UploadBatch_SingleGroup(t *testing.T) {
 	// Arrange
-	logger := zerolog.Nop()
 	mockClient := newMockGCSClient()
 	config := GCSBatchUploaderConfig{
 		BucketName:   "test-bucket",
 		ObjectPrefix: "uploads",
 	}
-	uploader, err := NewGCSBatchUploader(mockClient, config, logger)
+	uploader, err := NewGCSBatchUploader(mockClient, config, zerolog.Nop())
 	require.NoError(t, err)
 
 	batch := []*ArchivalData{
@@ -38,9 +37,10 @@ func TestGCSBatchUploader_UploadBatch_SingleGroup(t *testing.T) {
 
 	// Assert
 	mockClient.bucket.Lock()
-	defer mockClient.bucket.Unlock()
+	t.Cleanup(func() { mockClient.bucket.Unlock() })
+
 	// Should create one object because both items have the same BatchKey.
-	assert.Len(t, mockClient.bucket.objects, 1, "Expected one object to be created")
+	require.Len(t, mockClient.bucket.objects, 1, "Expected one object to be created")
 
 	for objectName, handle := range mockClient.bucket.objects {
 		assert.Contains(t, objectName, "uploads/2025/06/13/loc-a/", "Object path is incorrect")
@@ -51,7 +51,6 @@ func TestGCSBatchUploader_UploadBatch_SingleGroup(t *testing.T) {
 		content, err := io.ReadAll(gzReader)
 		require.NoError(t, err)
 
-		// Content should be two lines of JSON (JSONL format)
 		lines := bytes.Split(bytes.TrimSpace(content), []byte("\n"))
 		require.Len(t, lines, 2, "Expected two JSON records in the file")
 
@@ -68,13 +67,12 @@ func TestGCSBatchUploader_UploadBatch_SingleGroup(t *testing.T) {
 
 func TestGCSBatchUploader_UploadBatch_MultipleGroups(t *testing.T) {
 	// Arrange
-	logger := zerolog.Nop()
 	mockClient := newMockGCSClient()
 	config := GCSBatchUploaderConfig{
 		BucketName:   "test-bucket",
 		ObjectPrefix: "uploads",
 	}
-	uploader, err := NewGCSBatchUploader(mockClient, config, logger)
+	uploader, err := NewGCSBatchUploader(mockClient, config, zerolog.Nop())
 	require.NoError(t, err)
 
 	batch := []*ArchivalData{
@@ -89,9 +87,9 @@ func TestGCSBatchUploader_UploadBatch_MultipleGroups(t *testing.T) {
 
 	// Assert
 	mockClient.bucket.Lock()
-	defer mockClient.bucket.Unlock()
-	// Should create two objects because there are two unique BatchKeys.
-	assert.Len(t, mockClient.bucket.objects, 2, "Expected two objects to be created for two unique batch keys")
+	t.Cleanup(func() { mockClient.bucket.Unlock() })
+
+	require.Len(t, mockClient.bucket.objects, 2, "Expected two objects to be created for two unique batch keys")
 
 	foundA, foundB := false, false
 	for objectName := range mockClient.bucket.objects {
@@ -107,13 +105,12 @@ func TestGCSBatchUploader_UploadBatch_MultipleGroups(t *testing.T) {
 }
 
 func TestGCSBatchUploader_EmptyBatch(t *testing.T) {
-	logger := zerolog.Nop()
 	mockClient := newMockGCSClient()
 	config := GCSBatchUploaderConfig{
 		BucketName:   "test-bucket",
 		ObjectPrefix: "uploads",
 	}
-	uploader, err := NewGCSBatchUploader(mockClient, config, logger)
+	uploader, err := NewGCSBatchUploader(mockClient, config, zerolog.Nop())
 	require.NoError(t, err)
 
 	// Act
@@ -121,5 +118,5 @@ func TestGCSBatchUploader_EmptyBatch(t *testing.T) {
 	require.NoError(t, err)
 
 	// Assert
-	assert.Len(t, mockClient.bucket.objects, 0, "Should not create any objects for an empty batch")
+	assert.Empty(t, mockClient.bucket.objects, "Should not create any objects for an empty batch")
 }

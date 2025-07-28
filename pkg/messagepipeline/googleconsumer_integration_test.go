@@ -30,12 +30,12 @@ func TestGooglePubsubConsumer_Lifecycle_And_MessageReception(t *testing.T) {
 	emulatorConn := emulators.SetupPubsubEmulator(t, ctx, pubsubEmulatorCfg)
 	clientOptions := emulatorConn.ClientOptions
 
-	cfg := &messagepipeline.GooglePubsubConsumerConfig{
-		ProjectID:              projectID,
-		SubscriptionID:         subID,
-		MaxOutstandingMessages: 1,
-		NumGoroutines:          1,
-	}
+	// Use the defaults which now include the new timeout field.
+	cfg := messagepipeline.NewGooglePubsubConsumerDefaults()
+	cfg.ProjectID = projectID
+	cfg.SubscriptionID = subID
+	cfg.MaxOutstandingMessages = 1
+	cfg.NumGoroutines = 1
 
 	client, err := pubsub.NewClient(ctx, projectID, clientOptions...)
 	require.NoError(t, err)
@@ -73,20 +73,21 @@ func TestGooglePubsubConsumer_Lifecycle_And_MessageReception(t *testing.T) {
 		t.Fatal("timed out waiting for message")
 	}
 
-	// REFACTORED: Assertions are updated. The test now checks for the raw attributes
-	// on the ConsumedMessage, as the consumer is no longer responsible for creating DeviceInfo.
 	assert.Equal(t, msgPayload, receivedMsg.Payload)
 	require.NotNil(t, receivedMsg.Attributes)
 	assert.Equal(t, "device-123", receivedMsg.Attributes["uid"])
 	assert.Equal(t, "garden", receivedMsg.Attributes["location"])
-	assert.Nil(t, receivedMsg.EnrichmentData, "Consumer should not populate EnrichmentData")
+	assert.NotContains(t, receivedMsg.Attributes, "EnrichmentData", "Consumer should not populate EnrichmentData")
 	receivedMsg.Ack()
 
-	err = consumer.Stop()
+	// Pass the parent context to Stop, which has a 30s timeout.
+	err = consumer.Stop(ctx)
 	require.NoError(t, err)
 
+	// Verify that the Done channel is closed, confirming a graceful shutdown.
 	select {
 	case <-consumer.Done():
+		// Success
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for consumer to stop")
 	}

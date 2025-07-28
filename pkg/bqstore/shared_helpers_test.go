@@ -2,8 +2,10 @@ package bqstore_test
 
 import (
 	"context"
-	"github.com/illmade-knight/go-dataflow/pkg/types"
 	"sync"
+
+	"github.com/illmade-knight/go-dataflow/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 // ====================================================================================
@@ -16,8 +18,7 @@ type testPayload struct {
 }
 
 // MockDataBatchInserter is a mock implementation of bqstore.DataBatchInserter.
-// It has been updated to include an InsertBatchFn field to allow for configurable
-// success/failure behavior in tests.
+// It allows for injecting custom logic to simulate success or failure.
 type MockDataBatchInserter[T any] struct {
 	mu            sync.Mutex
 	receivedItems [][]*T
@@ -30,14 +31,10 @@ func (m *MockDataBatchInserter[T]) InsertBatch(ctx context.Context, items []*T) 
 	defer m.mu.Unlock()
 	m.callCount++
 	m.receivedItems = append(m.receivedItems, items)
-
-	// If a custom function is provided by the test, use it.
 	if m.InsertBatchFn != nil {
 		return m.InsertBatchFn(ctx, items)
 	}
-
-	// Default behavior is to succeed.
-	return nil
+	return nil // Default to success
 }
 
 func (m *MockDataBatchInserter[T]) Close() error { return nil }
@@ -52,7 +49,8 @@ func (m *MockDataBatchInserter[T]) GetCallCount() int {
 	return m.callCount
 }
 
-// MockMessageConsumer has been updated to correctly handle context cancellation.
+// MockMessageConsumer is a mock of the messagepipeline.MessageConsumer interface.
+// REFACTOR: This has been updated to fully align with the refactored interface.
 type MockMessageConsumer struct {
 	msgChan  chan types.ConsumedMessage
 	doneChan chan struct{}
@@ -66,21 +64,14 @@ func NewMockMessageConsumer(bufferSize int) *MockMessageConsumer {
 	}
 }
 func (m *MockMessageConsumer) Messages() <-chan types.ConsumedMessage { return m.msgChan }
-
-// Start now launches a goroutine that respects the context cancellation,
-// which is crucial for the service's graceful shutdown procedure.
 func (m *MockMessageConsumer) Start(ctx context.Context) error {
 	go func() {
-		// This goroutine waits for the parent context (from the service) to be canceled.
 		<-ctx.Done()
-		// When the context is canceled, it calls the mock consumer's Stop method.
-		m.Stop()
+		_ = m.Stop(context.Background()) // Call Stop when the context is cancelled.
 	}()
 	return nil
 }
-
-// Stop now uses sync.Once to prevent a panic from closing channels multiple times.
-func (m *MockMessageConsumer) Stop() error {
+func (m *MockMessageConsumer) Stop(ctx context.Context) error {
 	m.stopOnce.Do(func() {
 		close(m.msgChan)
 		close(m.doneChan)
@@ -89,10 +80,10 @@ func (m *MockMessageConsumer) Stop() error {
 }
 func (m *MockMessageConsumer) Done() <-chan struct{} { return m.doneChan }
 func (m *MockMessageConsumer) Push(msg types.ConsumedMessage) {
-	// Use a select to avoid blocking if the channel is full or closed.
-	select {
-	case m.msgChan <- msg:
-	default:
-		// In a test, we might want to know if this happens.
-	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Warn().Msg("Recovered from panic trying to push to closed consumer channel.")
+		}
+	}()
+	m.msgChan <- msg
 }

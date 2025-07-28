@@ -13,10 +13,11 @@ import (
 // KeyExtractor defines a function to get the enrichment key from a message.
 type KeyExtractor[K any] func(msg types.ConsumedMessage) (K, bool)
 
-// Enricher defines a function to apply the fetched data to a message's generic enrichment map.
+// Enricher defines a function to apply fetched data to a message's enrichment map.
 type Enricher[V any] func(msg *types.PublishMessage, data V)
 
 // NewEnrichmentTransformer creates a generic message transformer for data enrichment.
+// It uses a fetcher to get external data and an enricher to apply it to the message.
 func NewEnrichmentTransformer[K comparable, V any](
 	fetcher Fetcher[K, V],
 	keyExtractor KeyExtractor[K],
@@ -24,7 +25,8 @@ func NewEnrichmentTransformer[K comparable, V any](
 	deadLetterPublisher messagepipeline.SimplePublisher,
 	logger zerolog.Logger,
 ) messagepipeline.MessageTransformer[types.PublishMessage] {
-	return func(msg types.ConsumedMessage) (*types.PublishMessage, bool, error) {
+	// REFACTOR: The returned function now accepts a context.
+	return func(ctx context.Context, msg types.ConsumedMessage) (*types.PublishMessage, bool, error) {
 		handleFailure := func(reason string, key K) {
 			if deadLetterPublisher != nil {
 				attributes := map[string]string{
@@ -32,9 +34,12 @@ func NewEnrichmentTransformer[K comparable, V any](
 					"enrichment_key": fmt.Sprintf("%v", key),
 					"msg_id":         msg.ID,
 				}
-				_ = deadLetterPublisher.Publish(context.Background(), msg.Payload, attributes)
+				// REFACTOR: Use the provided context for the dead-letter publish call.
+				if err := deadLetterPublisher.Publish(ctx, msg.Payload, attributes); err != nil {
+					logger.Error().Err(err).Msg("Failed to publish to dead-letter topic.")
+				}
 			}
-			msg.Ack()
+			msg.Ack() // Ack the message even on failure to prevent reprocessing loops.
 		}
 
 		key, ok := keyExtractor(msg)
@@ -43,15 +48,14 @@ func NewEnrichmentTransformer[K comparable, V any](
 			return nil, true, nil // Skip message
 		}
 
-		data, err := fetcher(context.Background(), key)
+		// REFACTOR: Use the provided context for the fetch call.
+		data, err := fetcher(ctx, key)
 		if err != nil {
-			logger.Error().Err(err).Msg("Failed to fetch enrichment data.")
+			logger.Error().Err(err).Str("key", fmt.Sprintf("%v", key)).Msg("Failed to fetch enrichment data.")
 			handleFailure("data_fetch_failed", key)
 			return nil, true, nil // Skip message
 		}
 
-		// Create the base message to be published.
-		// It now initializes an empty EnrichmentData map instead of copying DeviceInfo.
 		enrichedMsg := &types.PublishMessage{
 			ID:             msg.ID,
 			Payload:        msg.Payload,
@@ -59,7 +63,6 @@ func NewEnrichmentTransformer[K comparable, V any](
 			EnrichmentData: make(map[string]interface{}), // Initialize the generic map
 		}
 
-		// The provided enricher function is now responsible for populating the EnrichmentData map.
 		enricher(enrichedMsg, data)
 
 		logger.Debug().Str("msg_id", msg.ID).Msg("Message enriched successfully.")

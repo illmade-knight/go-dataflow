@@ -27,14 +27,17 @@ func receiveSingleMessage(t *testing.T, ctx context.Context, sub *pubsub.Subscri
 		if receivedMsg == nil {
 			receivedMsg = msg
 			msg.Ack()
-			receiveCancel()
+			receiveCancel() // Stop receiving after getting the first message.
 		} else {
+			// This can happen in tests if more than one message arrives.
+			// Nack subsequent messages to avoid them being redelivered.
 			msg.Nack()
 		}
 	})
 
+	// context.Canceled is the expected error when receiveCancel() is called.
 	if err != nil && err != context.Canceled {
-		t.Logf("Receive loop ended with error: %v", err)
+		t.Logf("Receive loop ended with an unexpected error: %v", err)
 	}
 
 	mu.RLock()
@@ -86,17 +89,17 @@ func (m *MockMessageConsumer) Start(ctx context.Context) error {
 	if m.startErr != nil {
 		return m.startErr
 	}
+	// Simulate being stopped by the context.
 	go func() {
 		<-ctx.Done()
-		_ = m.Stop()
+		_ = m.Stop(context.Background()) // Call stop when context is done.
 	}()
 	return nil
 }
 
 // Stop gracefully closes the message and done channels.
-// FIX: This now correctly simulates a real consumer by draining its internal
-// buffer and Nacking any outstanding messages upon shutdown.
-func (m *MockMessageConsumer) Stop() error {
+// It now conforms to the updated MessageConsumer interface.
+func (m *MockMessageConsumer) Stop(ctx context.Context) error {
 	m.stopOnce.Do(func() {
 		m.startMu.Lock()
 		m.stopCount++
@@ -105,6 +108,7 @@ func (m *MockMessageConsumer) Stop() error {
 		close(m.doneChan)
 		close(m.msgChan)
 
+		// Nack any messages that were in the buffer but not processed.
 		for msg := range m.msgChan {
 			log.Warn().Str("msg_id", msg.ID).Msg("MockConsumer draining and Nacking message on shutdown.")
 			if msg.Nack != nil {
@@ -122,6 +126,7 @@ func (m *MockMessageConsumer) Done() <-chan struct{} {
 
 // Push is a test helper to inject a message into the mock consumer's channel.
 func (m *MockMessageConsumer) Push(msg types.ConsumedMessage) {
+	// A panic can occur if a test tries to push after Stop() has been called.
 	defer func() {
 		if r := recover(); r != nil {
 			log.Warn().Msg("Recovered from panic trying to push to closed consumer channel.")
@@ -186,37 +191,45 @@ func (m *MockMessageProcessor[T]) Input() chan<- *types.BatchedMessage[T] {
 
 // Start begins the processor's operations.
 func (m *MockMessageProcessor[T]) Start(ctx context.Context) {
-	m.mu.Lock()
+	m.startMu.Lock()
 	m.startCount++
-	m.mu.Unlock()
+	m.startMu.Unlock()
 
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		for msg := range m.InputChan {
-			if m.processDelay > 0 {
-				time.Sleep(m.processDelay)
-			}
-			m.mu.Lock()
-			m.Received = append(m.Received, msg)
-			if m.ackOnProcess {
-				msg.OriginalMessage.Ack()
-			}
-			hook := m.processingHook
-			m.mu.Unlock()
-
-			if hook != nil {
-				hook(msg)
-			}
-
-			m.mu.Lock()
-			signalChan := m.messageProcessedSignal
-			m.mu.Unlock()
-			if signalChan != nil {
-				select {
-				case signalChan <- struct{}{}:
-				default:
+		for {
+			select {
+			case msg, ok := <-m.InputChan:
+				if !ok {
+					return // Channel closed, exit goroutine.
 				}
+
+				if m.processDelay > 0 {
+					time.Sleep(m.processDelay)
+				}
+				m.mu.Lock()
+				m.Received = append(m.Received, msg)
+				if m.ackOnProcess {
+					msg.OriginalMessage.Ack()
+				}
+				hook := m.processingHook
+				signalChan := m.messageProcessedSignal
+				m.mu.Unlock()
+
+				if hook != nil {
+					hook(msg)
+				}
+
+				if signalChan != nil {
+					select {
+					case signalChan <- struct{}{}:
+					default:
+					}
+				}
+			case <-ctx.Done():
+				// If the context is cancelled, stop processing and exit.
+				return
 			}
 		}
 	}()
@@ -229,13 +242,27 @@ func (m *MockMessageProcessor[T]) GetStartCount() int {
 	return m.startCount
 }
 
-// Stop gracefully shuts down the processor.
-func (m *MockMessageProcessor[T]) Stop() {
-	m.mu.Lock()
+// Stop gracefully shuts down the processor, respecting the context deadline.
+func (m *MockMessageProcessor[T]) Stop(ctx context.Context) error {
+	m.startMu.Lock()
 	m.stopCount++
-	m.mu.Unlock()
+	m.startMu.Unlock()
+
 	close(m.InputChan)
-	m.wg.Wait()
+
+	// Wait for the processing goroutine to finish, but respect the timeout.
+	done := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil // Graceful shutdown completed.
+	case <-ctx.Done():
+		return ctx.Err() // Shutdown timed out.
+	}
 }
 
 func (m *MockMessageProcessor[T]) GetStopCount() int {
@@ -248,6 +275,7 @@ func (m *MockMessageProcessor[T]) GetStopCount() int {
 func (m *MockMessageProcessor[T]) GetReceived() []*types.BatchedMessage[T] {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Create a copy to avoid race conditions in tests.
 	receivedCopy := make([]*types.BatchedMessage[T], len(m.Received))
 	copy(receivedCopy, m.Received)
 	return receivedCopy

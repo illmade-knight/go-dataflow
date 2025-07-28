@@ -7,30 +7,21 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// ====================================================================================
-// This file provides a convenience constructor for creating an icestore-specific
-// processing service. It leverages the generic ProcessingService from the
-// shared consumers package.
-// REFACTORED: All generic types have been removed. This package is now specific
-// to archiving ArchivalData.
-// ====================================================================================
-
-// NewIceStorageService is a constructor function that assembles and returns a fully configured
-// GCS archival pipeline. It is now specific to processing ArchivalData.
+// NewIceStorageService is a constructor that assembles a complete GCS archival pipeline.
+// It wires together a message consumer, a batcher, and a message transformer into
+// a generic processing service tailored for ArchivalData.
 func NewIceStorageService(
 	numWorkers int,
 	consumer messagepipeline.MessageConsumer,
-	batcher *Batcher, // Non-generic
-	transformer messagepipeline.MessageTransformer[ArchivalData], // Explicit type
+	batcher *Batcher,
+	transformer messagepipeline.MessageTransformer[ArchivalData],
 	logger zerolog.Logger,
 ) (*messagepipeline.ProcessingService[ArchivalData], error) {
 
-	// The consumers.ProcessingService is still generic, so we specify that it
-	// will be handling the ArchivalData type.
 	processingService, err := messagepipeline.NewProcessingService[ArchivalData](
 		numWorkers,
 		consumer,
-		batcher, // Pass the non-generic Batcher
+		batcher, // The icestore.Batcher satisfies the MessageProcessor interface.
 		transformer,
 		logger,
 	)
@@ -41,9 +32,9 @@ func NewIceStorageService(
 	return processingService, nil
 }
 
-// NewGCSBatchProcessor is a high-level convenience constructor that creates a
-// complete GCS archival pipeline component (uploader + batcher) that satisfies the
-// messagepipeline.MessageProcessor interface.
+// NewGCSBatchProcessor is a high-level helper that creates a complete GCS archival
+// component (uploader + batcher). The returned Batcher satisfies the
+// messagepipeline.MessageProcessor interface and can be passed to NewIceStorageService.
 func NewGCSBatchProcessor(
 	gcsClient GCSClient,
 	batchCfg *BatcherConfig,

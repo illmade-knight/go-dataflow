@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,10 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockFinalUploader is a mock implementation of the non-generic DataUploader interface.
+// mockFinalUploader is a mock implementation of the DataUploader interface.
 type mockFinalUploader struct {
 	sync.Mutex
-	InsertBatchFn func(ctx context.Context, items []*ArchivalData) error
+	UploadBatchFn func(ctx context.Context, items []*ArchivalData) error
 	callCount     int
 	receivedItems [][]*ArchivalData
 }
@@ -26,8 +27,8 @@ func (m *mockFinalUploader) UploadBatch(ctx context.Context, items []*ArchivalDa
 	defer m.Unlock()
 	m.callCount++
 	m.receivedItems = append(m.receivedItems, items)
-	if m.InsertBatchFn != nil {
-		return m.InsertBatchFn(ctx, items)
+	if m.UploadBatchFn != nil {
+		return m.UploadBatchFn(ctx, items)
 	}
 	return nil
 }
@@ -43,79 +44,86 @@ func (m *mockFinalUploader) GetReceivedItems() [][]*ArchivalData {
 	return m.receivedItems
 }
 
-// --- Batcher Test Cases (Non-Generic) ---
+// newTestIceBatcher is a helper to set up a batcher with a mock for testing.
+func newTestIceBatcher(t *testing.T, batchSize int, flushInterval time.Duration) (*Batcher, *mockFinalUploader) {
+	t.Helper()
 
-func TestBatcher_BatchSizeTrigger(t *testing.T) {
-	logger := zerolog.Nop()
 	mockUploader := &mockFinalUploader{}
 	config := &BatcherConfig{
-		BatchSize:    3,
-		FlushTimeout: 1 * time.Second,
+		BatchSize:     batchSize,
+		FlushInterval: flushInterval,
+		UploadTimeout: 2 * time.Second,
 	}
 
-	batcher := NewBatcher(config, mockUploader, logger)
-	batcher.Start(context.Background())
-	defer batcher.Stop()
+	batcher := NewBatcher(config, mockUploader, zerolog.Nop())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	batcher.Start(ctx)
+
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stopCancel()
+		assert.NoError(t, batcher.Stop(stopCtx))
+	})
+	return batcher, mockUploader
+}
+
+func TestBatcher_BatchSizeTrigger(t *testing.T) {
+	batcher, mockUploader := newTestIceBatcher(t, 3, 10*time.Second)
 
 	for i := 0; i < 3; i++ {
-		batcher.Input() <- &types.BatchedMessage[ArchivalData]{
-			Payload: &ArchivalData{},
-		}
+		batcher.Input() <- &types.BatchedMessage[ArchivalData]{Payload: &ArchivalData{}}
 	}
 
-	time.Sleep(100 * time.Millisecond) // Allow time for flush
+	// REFACTOR: Use Eventually to wait for the flush instead of time.Sleep.
+	require.Eventually(t, func() bool {
+		return mockUploader.GetCallCount() == 1
+	}, time.Second, 10*time.Millisecond, "UploadBatch should be called once")
 
-	assert.Equal(t, 1, mockUploader.GetCallCount(), "UploadBatch should be called once")
 	receivedBatches := mockUploader.GetReceivedItems()
 	require.Len(t, receivedBatches, 1)
 	assert.Len(t, receivedBatches[0], 3, "The batch should contain 3 items")
 }
 
-func TestBatcher_FlushTimeoutTrigger(t *testing.T) {
-	logger := zerolog.Nop()
-	mockUploader := &mockFinalUploader{}
-	config := &BatcherConfig{
-		BatchSize:    10,
-		FlushTimeout: 100 * time.Millisecond,
-	}
-
-	batcher := NewBatcher(config, mockUploader, logger)
-	batcher.Start(context.Background())
-	defer batcher.Stop()
+func TestBatcher_FlushIntervalTrigger(t *testing.T) {
+	flushInterval := 100 * time.Millisecond
+	batcher, mockUploader := newTestIceBatcher(t, 10, flushInterval)
 
 	for i := 0; i < 2; i++ {
-		batcher.Input() <- &types.BatchedMessage[ArchivalData]{
-			Payload: &ArchivalData{},
-		}
+		batcher.Input() <- &types.BatchedMessage[ArchivalData]{Payload: &ArchivalData{}}
 	}
 
-	time.Sleep(150 * time.Millisecond) // Wait for timeout
+	// REFACTOR: Use Eventually to wait for the flush triggered by the interval.
+	require.Eventually(t, func() bool {
+		return mockUploader.GetCallCount() == 1
+	}, flushInterval*2, 10*time.Millisecond, "UploadBatch should be called once due to timeout")
 
-	assert.Equal(t, 1, mockUploader.GetCallCount(), "UploadBatch should be called once due to timeout")
 	receivedBatches := mockUploader.GetReceivedItems()
 	require.Len(t, receivedBatches, 1)
 	assert.Len(t, receivedBatches[0], 2, "The batch should contain 2 items")
 }
 
 func TestBatcher_StopFlushesFinalBatch(t *testing.T) {
-	logger := zerolog.Nop()
 	mockUploader := &mockFinalUploader{}
 	config := &BatcherConfig{
-		BatchSize:    10,
-		FlushTimeout: 5 * time.Second,
+		BatchSize:     10,
+		FlushInterval: 5 * time.Second,
+		UploadTimeout: 2 * time.Second,
 	}
 
-	batcher := NewBatcher(config, mockUploader, logger)
+	batcher := NewBatcher(config, mockUploader, zerolog.Nop())
 	batcher.Start(context.Background())
 
 	for i := 0; i < 4; i++ {
-		batcher.Input() <- &types.BatchedMessage[ArchivalData]{
-			Payload: &ArchivalData{},
-		}
+		batcher.Input() <- &types.BatchedMessage[ArchivalData]{Payload: &ArchivalData{}}
 	}
-	time.Sleep(50 * time.Millisecond)
 
-	batcher.Stop() // Should trigger final flush
+	// REFACTOR: Explicitly call Stop to trigger the final flush.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	t.Cleanup(stopCancel)
+	err := batcher.Stop(stopCtx)
+	require.NoError(t, err)
 
 	assert.Equal(t, 1, mockUploader.GetCallCount(), "UploadBatch should be called on stop")
 	receivedBatches := mockUploader.GetReceivedItems()
@@ -124,65 +132,41 @@ func TestBatcher_StopFlushesFinalBatch(t *testing.T) {
 }
 
 func TestBatcher_AckNackLogic(t *testing.T) {
-	createMessage := func() (*types.BatchedMessage[ArchivalData], *sync.WaitGroup, *bool, *bool) {
-		var wg sync.WaitGroup
-		wg.Add(1)
-		ackCalled, nackCalled := false, false
+	createMessage := func() (*types.BatchedMessage[ArchivalData], *uint32, *uint32) {
+		var ackCount, nackCount uint32
 		msg := &types.BatchedMessage[ArchivalData]{
 			Payload: &ArchivalData{},
 			OriginalMessage: types.ConsumedMessage{
-				Ack: func() {
-					ackCalled = true
-					wg.Done()
-				},
-				Nack: func() {
-					nackCalled = true
-					wg.Done()
-				},
+				Ack:  func() { atomic.AddUint32(&ackCount, 1) },
+				Nack: func() { atomic.AddUint32(&nackCount, 1) },
 			},
 		}
-		return msg, &wg, &ackCalled, &nackCalled
+		return msg, &ackCount, &nackCount
 	}
 
 	t.Run("acks messages on successful upload", func(t *testing.T) {
-		logger := zerolog.Nop()
-		mockUploader := &mockFinalUploader{
-			InsertBatchFn: func(ctx context.Context, items []*ArchivalData) error {
-				return nil // Success
-			},
+		batcher, mockUploader := newTestIceBatcher(t, 1, time.Second)
+		mockUploader.UploadBatchFn = func(ctx context.Context, items []*ArchivalData) error {
+			return nil // Success
 		}
-		config := &BatcherConfig{BatchSize: 1, FlushTimeout: time.Second}
-		batcher := NewBatcher(config, mockUploader, logger)
-		batcher.Start(context.Background())
-		defer batcher.Stop()
 
-		msg, wg, ack, nack := createMessage()
+		msg, ack, nack := createMessage()
 		batcher.Input() <- msg
 
-		wg.Wait() // Wait for Ack/Nack to be called
-
-		assert.True(t, *ack, "Should have acked the message")
-		assert.False(t, *nack, "Should not have nacked the message")
+		require.Eventually(t, func() bool { return atomic.LoadUint32(ack) == 1 }, time.Second, 10*time.Millisecond)
+		assert.Equal(t, uint32(0), atomic.LoadUint32(nack))
 	})
 
 	t.Run("nacks messages on failed upload", func(t *testing.T) {
-		logger := zerolog.Nop()
-		mockUploader := &mockFinalUploader{
-			InsertBatchFn: func(ctx context.Context, items []*ArchivalData) error {
-				return errors.New("gcs upload failed") // Failure
-			},
+		batcher, mockUploader := newTestIceBatcher(t, 1, time.Second)
+		mockUploader.UploadBatchFn = func(ctx context.Context, items []*ArchivalData) error {
+			return errors.New("gcs upload failed") // Failure
 		}
-		config := &BatcherConfig{BatchSize: 1, FlushTimeout: time.Second}
-		batcher := NewBatcher(config, mockUploader, logger)
-		batcher.Start(context.Background())
-		defer batcher.Stop()
 
-		msg, wg, ack, nack := createMessage()
+		msg, ack, nack := createMessage()
 		batcher.Input() <- msg
 
-		wg.Wait() // Wait for Ack/Nack to be called
-
-		assert.False(t, *ack, "Should not have acked the message")
-		assert.True(t, *nack, "Should have nacked the message")
+		require.Eventually(t, func() bool { return atomic.LoadUint32(nack) == 1 }, time.Second, 10*time.Millisecond)
+		assert.Equal(t, uint32(0), atomic.LoadUint32(ack))
 	})
 }

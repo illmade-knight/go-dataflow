@@ -8,7 +8,7 @@ require (
 	cloud.google.com/go/pubsub v1.49.0
 	cloud.google.com/go/storage v1.56.0
 	github.com/google/uuid v1.6.0
-	github.com/illmade-knight/go-test v0.0.1-beta
+	github.com/illmade-knight/go-test v0.0.2-beta
 	github.com/redis/go-redis/v9 v9.11.0
 	github.com/rs/zerolog v1.34.0
 	github.com/stretchr/testify v1.10.0

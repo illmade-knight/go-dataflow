@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/illmade-knight/go-dataflow/pkg/types"
 	"sync"
+
+	"github.com/illmade-knight/go-dataflow/pkg/types"
 )
 
 // --- Mock GCS Client Components ---
@@ -36,7 +37,7 @@ type mockGCSObjectHandle struct {
 	writer *mockGCSWriter
 }
 
-func (m *mockGCSObjectHandle) NewWriter(ctx context.Context) GCSWriter {
+func (m *mockGCSObjectHandle) NewWriter(_ context.Context) GCSWriter {
 	if m.writer == nil {
 		m.writer = &mockGCSWriter{}
 	}
@@ -72,7 +73,7 @@ func newMockGCSClient() *mockGCSClient {
 	}
 }
 
-func (m *mockGCSClient) Bucket(name string) GCSBucketHandle {
+func (m *mockGCSClient) Bucket(_ string) GCSBucketHandle {
 	return m.bucket
 }
 
@@ -93,11 +94,14 @@ func (m *MockMessageConsumer) Messages() <-chan types.ConsumedMessage { return m
 func (m *MockMessageConsumer) Start(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
-		m.Stop()
+		// Call Stop with a background context as the mock's shutdown is simple.
+		_ = m.Stop(context.Background())
 	}()
 	return nil
 }
-func (m *MockMessageConsumer) Stop() error {
+
+// REFACTOR: The Stop method now accepts a context to conform to the updated interface.
+func (m *MockMessageConsumer) Stop(_ context.Context) error {
 	m.stopOnce.Do(func() {
 		close(m.msgChan)
 		close(m.doneChan)

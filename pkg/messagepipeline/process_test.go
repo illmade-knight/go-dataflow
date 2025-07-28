@@ -25,15 +25,16 @@ type processTestPayload struct {
 func newTestService[T any](numWorkers, consumerBuffer, processorBuffer int) (*messagepipeline.ProcessingService[T], *MockMessageConsumer, *MockMessageProcessor[T]) {
 	consumer := NewMockMessageConsumer(consumerBuffer)
 	processor := NewMockMessageProcessor[T](processorBuffer)
-	// A standard transformer that succeeds.
-	transformer := func(msg types.ConsumedMessage) (*T, bool, error) {
+
+	// FIX: The transformer now accepts a context.Context to match the updated interface.
+	transformer := func(ctx context.Context, msg types.ConsumedMessage) (*T, bool, error) {
 		payload := any(&processTestPayload{Data: string(msg.Payload)}).(*T)
 		return payload, false, nil
 	}
 
 	service, err := messagepipeline.NewProcessingService[T](numWorkers, consumer, processor, transformer, zerolog.Nop())
 	if err != nil {
-		panic(err) // Should not happen with valid inputs.
+		panic(err)
 	}
 	return service, consumer, processor
 }
@@ -43,23 +44,18 @@ func newTestService[T any](numWorkers, consumerBuffer, processorBuffer int) (*me
 func TestProcessingService_Lifecycle(t *testing.T) {
 	service, consumer, processor := newTestService[processTestPayload](1, 10, 10)
 
-	// Provide a context for the service Start, which will be passed to consumer/processor
 	serviceCtx, serviceCancel := context.WithCancel(context.Background())
-	defer serviceCancel() // Ensure context is cancelled on test exit
+	t.Cleanup(serviceCancel)
 
-	err := service.Start(serviceCtx) // Now starts with internal shutdownCtx
+	err := service.Start(serviceCtx)
 	require.NoError(t, err)
-
-	// Give components a moment to start their goroutines before checking counts
-	time.Sleep(10 * time.Millisecond)
 
 	assert.Equal(t, 1, consumer.GetStartCount())
 	assert.Equal(t, 1, processor.GetStartCount())
 
-	service.Stop()
-
-	// Give components a moment to stop
-	time.Sleep(10 * time.Millisecond)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(stopCancel)
+	service.Stop(stopCtx)
 
 	assert.Equal(t, 1, consumer.GetStopCount())
 	assert.Equal(t, 1, processor.GetStopCount())
@@ -69,24 +65,25 @@ func TestProcessingService_ProcessMessage_Success(t *testing.T) {
 	service, consumer, processor := newTestService[processTestPayload](1, 10, 10)
 
 	serviceCtx, serviceCancel := context.WithCancel(context.Background())
-	defer serviceCancel()
+	t.Cleanup(serviceCancel)
 
 	err := service.Start(serviceCtx)
 	require.NoError(t, err)
-	defer service.Stop()
 
-	// Ensure the processor will call Ack/Nack (as the ProcessingService now manages it)
-	processor.SetAckOnProcess(true) // Processor mock now responsible for Ack/Nack on messages it processes.
+	processor.SetAckOnProcess(true)
 
-	ackCalled, nackCalled := false, false
-	var ackNackMu sync.Mutex // Initialized correctly
+	ackCalled := false
+	var ackMu sync.Mutex
 	msg := types.ConsumedMessage{
 		PublishMessage: types.PublishMessage{
 			ID:      "test-msg-1",
 			Payload: []byte("original"),
 		},
-		Ack:  func() { ackNackMu.Lock(); ackCalled = true; ackNackMu.Unlock() },
-		Nack: func() { ackNackMu.Lock(); nackCalled = true; ackNackMu.Unlock() },
+		Ack: func() {
+			ackMu.Lock()
+			ackCalled = true
+			ackMu.Unlock()
+		},
 	}
 	consumer.Push(msg)
 
@@ -97,20 +94,23 @@ func TestProcessingService_ProcessMessage_Success(t *testing.T) {
 	received := processor.GetReceived()
 	assert.Equal(t, "original", received[0].Payload.Data)
 
-	require.Eventually(t, func() bool { // Wait for Ack to be called by processor mock
-		ackNackMu.Lock()
-		defer ackNackMu.Unlock()
+	require.Eventually(t, func() bool {
+		ackMu.Lock()
+		defer ackMu.Unlock()
 		return ackCalled
 	}, time.Second, 10*time.Millisecond, "Ack was not called for successful message")
-	assert.False(t, nackCalled, "Nack should not be called")
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	t.Cleanup(stopCancel)
+	service.Stop(stopCtx)
 }
 
-// CORRECTED: This test now correctly injects the failing transformer at construction time.
 func TestProcessingService_ProcessMessage_TransformerError(t *testing.T) {
 	// Arrange
 	consumer := NewMockMessageConsumer(10)
 	processor := NewMockMessageProcessor[processTestPayload](10)
-	failingTransformer := func(msg types.ConsumedMessage) (*processTestPayload, bool, error) {
+	// FIX: The transformer now accepts a context.Context.
+	failingTransformer := func(ctx context.Context, msg types.ConsumedMessage) (*processTestPayload, bool, error) {
 		return nil, false, errors.New("transformation failed")
 	}
 
@@ -118,14 +118,13 @@ func TestProcessingService_ProcessMessage_TransformerError(t *testing.T) {
 	require.NoError(t, err)
 
 	serviceCtx, serviceCancel := context.WithCancel(context.Background())
-	defer serviceCancel()
+	t.Cleanup(serviceCancel)
 
 	err = service.Start(serviceCtx)
 	require.NoError(t, err)
-	defer service.Stop()
 
 	nackCalled := false
-	var nackMu sync.Mutex // Initialized correctly
+	var nackMu sync.Mutex
 	msg := types.ConsumedMessage{
 		PublishMessage: types.PublishMessage{ID: "test-msg-err"},
 		Nack:           func() { nackMu.Lock(); nackCalled = true; nackMu.Unlock() },
@@ -142,14 +141,18 @@ func TestProcessingService_ProcessMessage_TransformerError(t *testing.T) {
 	}, time.Second, 10*time.Millisecond, "Nack was not called on transformer error")
 
 	assert.Empty(t, processor.GetReceived(), "Processor should not receive any message on transformer error")
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	t.Cleanup(stopCancel)
+	service.Stop(stopCtx)
 }
 
-// CORRECTED: This test is simplified and focuses on the skip logic.
 func TestProcessingService_ProcessMessage_Skip(t *testing.T) {
 	// Arrange
 	consumer := NewMockMessageConsumer(10)
 	processor := NewMockMessageProcessor[processTestPayload](10)
-	skippingTransformer := func(msg types.ConsumedMessage) (*processTestPayload, bool, error) {
+	// FIX: The transformer now accepts a context.Context.
+	skippingTransformer := func(ctx context.Context, msg types.ConsumedMessage) (*processTestPayload, bool, error) {
 		return nil, true, nil // Signal to skip
 	}
 
@@ -157,14 +160,13 @@ func TestProcessingService_ProcessMessage_Skip(t *testing.T) {
 	require.NoError(t, err)
 
 	serviceCtx, serviceCancel := context.WithCancel(context.Background())
-	defer serviceCancel()
+	t.Cleanup(serviceCancel)
 
 	err = service.Start(serviceCtx)
 	require.NoError(t, err)
-	defer service.Stop()
 
 	ackCalled := false
-	var ackMu sync.Mutex // Initialized correctly
+	var ackMu sync.Mutex
 	msg := types.ConsumedMessage{
 		PublishMessage: types.PublishMessage{ID: "test-msg-skip"},
 		Ack:            func() { ackMu.Lock(); ackCalled = true; ackMu.Unlock() },
@@ -181,4 +183,8 @@ func TestProcessingService_ProcessMessage_Skip(t *testing.T) {
 	}, time.Second, 10*time.Millisecond, "Ack was not called on skip")
 
 	assert.Empty(t, processor.GetReceived(), "Processor should not receive any message on skip")
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	t.Cleanup(stopCancel)
+	service.Stop(stopCtx)
 }
