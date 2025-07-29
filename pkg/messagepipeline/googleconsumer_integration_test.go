@@ -31,7 +31,7 @@ func TestGooglePubsubConsumer_Lifecycle_And_MessageReception(t *testing.T) {
 	clientOptions := emulatorConn.ClientOptions
 
 	// Use the defaults which now include the new timeout field.
-	cfg := messagepipeline.NewGooglePubsubConsumerDefaults()
+	cfg := messagepipeline.NewGooglePubsubConsumerDefaults(projectID)
 	cfg.ProjectID = projectID
 	cfg.SubscriptionID = subID
 	cfg.MaxOutstandingMessages = 1

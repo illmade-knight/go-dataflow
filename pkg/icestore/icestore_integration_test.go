@@ -23,14 +23,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- Test Constants ---
-const (
-	testProjectID      = "icestore-test-project"
-	testTopicID        = "icestore-test-topic"
-	testSubscriptionID = "icestore-test-sub"
-	testBucketName     = "icestore-test-bucket"
-)
-
 // --- Test-Specific Data Structures ---
 type TestPayload struct {
 	Sensor   string `json:"sensor"`
@@ -46,6 +38,14 @@ type PublishedMessage struct {
 
 // --- Table-Driven Test Main ---
 func TestIceStorageService_Integration(t *testing.T) {
+
+	const (
+		testProjectID      = "icestore-test-project"
+		testTopicID        = "icestore-test-topic"
+		testSubscriptionID = "icestore-test-sub"
+		testBucketName     = "icestore-test-bucket"
+	)
+
 	// --- One-time Setup for Emulators ---
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(cancel)
@@ -108,7 +108,7 @@ func TestIceStorageService_Integration(t *testing.T) {
 			t.Cleanup(func() { _ = psClient.Close() })
 
 			// --- Initialize Service Components ---
-			consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
+			consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(testProjectID)
 			consumerCfg.ProjectID = testProjectID
 			consumerCfg.SubscriptionID = testSubscriptionID
 			consumer, err := messagepipeline.NewGooglePubsubConsumer(testCtx, consumerCfg, psClient, logger)
@@ -137,7 +137,7 @@ func TestIceStorageService_Integration(t *testing.T) {
 			})
 
 			// --- Publish Test Messages ---
-			publishMessages(t, testCtx, psClient, tc.messagesToPublish)
+			publishMessages(t, testCtx, psClient, testTopicID, tc.messagesToPublish)
 
 			// --- Verification ---
 			// FIX: Wait for the side-effect (files in GCS) to occur. This verifies the running
@@ -156,7 +156,7 @@ func TestIceStorageService_Integration(t *testing.T) {
 }
 
 // publishMessages is a helper to publish a slice of messages for a test case.
-func publishMessages(t *testing.T, ctx context.Context, client *pubsub.Client, messages []PublishedMessage) {
+func publishMessages(t *testing.T, ctx context.Context, client *pubsub.Client, testTopicID string, messages []PublishedMessage) {
 	t.Helper()
 	if len(messages) == 0 {
 		return

@@ -36,7 +36,7 @@ type TestUpstreamMessage struct {
 
 // ConsumedMessageTransformer implements the MessageTransformer logic for this test.
 // FIX: The transformer now accepts a context to match the updated interface.
-func ConsumedMessageTransformer(ctx context.Context, msg types.ConsumedMessage) (*MonitorReadings, bool, error) {
+func ConsumedMessageTransformer(_ context.Context, msg types.ConsumedMessage) (*MonitorReadings, bool, error) {
 	var upstreamMsg TestUpstreamMessage
 	if err := json.Unmarshal(msg.Payload, &upstreamMsg); err != nil {
 		return nil, false, fmt.Errorf("failed to unmarshal upstream message: %w", err)
@@ -47,16 +47,17 @@ func ConsumedMessageTransformer(ctx context.Context, msg types.ConsumedMessage) 
 	return upstreamMsg.Payload, false, nil // Success.
 }
 
-const (
-	testProjectID           = "test-garden-project"
-	testInputTopicID        = "garden-monitor-topic"
-	testInputSubscriptionID = "garden-monitor-sub"
-	testBigQueryDatasetID   = "garden_data_dataset"
-	testBigQueryTableID     = "monitor_payloads"
-	testDeviceUID           = "GARDEN_MONITOR_001"
-)
-
 func TestBigQueryService_Integration_FullFlow(t *testing.T) {
+
+	const (
+		testProjectID           = "test-garden-project"
+		testInputTopicID        = "garden-monitor-topic"
+		testInputSubscriptionID = "garden-monitor-sub"
+		testBigQueryDatasetID   = "garden_data_dataset"
+		testBigQueryTableID     = "monitor_payloads"
+		testDeviceUID           = "GARDEN_MONITOR_001"
+	)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 
@@ -71,7 +72,7 @@ func TestBigQueryService_Integration_FullFlow(t *testing.T) {
 	// --- Configuration and Client Setup ---
 	logger := zerolog.New(io.Discard)
 
-	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
+	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(testProjectID)
 	consumerCfg.ProjectID = testProjectID
 	consumerCfg.SubscriptionID = testInputSubscriptionID
 

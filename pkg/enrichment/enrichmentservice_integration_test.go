@@ -99,13 +99,13 @@ func TestEnrichmentService_WithDeviceMetadata(t *testing.T) {
 	t.Cleanup(func() { _ = cleanup() })
 
 	// REFACTOR: Update all constructor calls to use correct, consistent signatures and configs.
-	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
+	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(projectID)
 	consumerCfg.ProjectID = projectID
 	consumerCfg.SubscriptionID = inputSubID
 	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, testClient, logger)
 	require.NoError(t, err)
 
-	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
+	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults(projectID)
 	producerCfg.ProjectID = projectID
 	producerCfg.TopicID = outputTopicID
 	producerCfg.BatchDelay = 20 * time.Millisecond

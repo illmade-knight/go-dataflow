@@ -81,6 +81,8 @@ type TestPayload struct {
 func TestGooglePubsubProducer_Lifecycle_And_MessageProduction(t *testing.T) {
 	ctx := context.Background()
 
+	projectID := "test_project_id"
+
 	testCases := []struct {
 		name           string
 		messagesToSend int
@@ -105,7 +107,7 @@ func TestGooglePubsubProducer_Lifecycle_And_MessageProduction(t *testing.T) {
 			dynamicTopicID := fmt.Sprintf("topic-%s", uniqueSuffix)
 			pubsubClient, outputTopic := setupTestPubsub(t, currentProjectID, dynamicTopicID)
 
-			producerConfig := messagepipeline.NewGooglePubsubProducerDefaults()
+			producerConfig := messagepipeline.NewGooglePubsubProducerDefaults(projectID)
 			producerConfig.TopicID = outputTopic.ID()
 			producerConfig.BatchSize = tc.batchSize
 			producerConfig.BatchDelay = tc.batchDelay

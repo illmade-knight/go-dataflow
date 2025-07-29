@@ -51,7 +51,7 @@ func TestMqttPipeline_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a standard Pub/Sub producer for the output.
-	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
+	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults(projectID)
 	producerCfg.ProjectID = projectID
 	producerCfg.TopicID = outputTopicID
 	producer, err := messagepipeline.NewGooglePubsubProducer[mqttconverter.RawMessage](ctx, producerCfg, psClient, logger)
