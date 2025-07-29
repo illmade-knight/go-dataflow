@@ -75,3 +75,23 @@ func (s *FirestoreSource[K, V]) Close() error {
 	s.logger.Info().Msg("FirestoreSource does not close the injected Firestore client.")
 	return nil
 }
+
+// ALLOW FIRESTORE TO BE USED IN LOW VOLUME DEPLOYMENTS
+// don't use it like this in high volume deployments - that's what redis is for.
+
+// FetchFromCache satisfies the Cache interface by calling the existing Fetch method.
+func (s *FirestoreSource[K, V]) FetchFromCache(ctx context.Context, key K) (V, error) {
+	return s.Fetch(ctx, key)
+}
+
+// WriteToCache satisfies the Cache interface by writing the document to Firestore.
+func (s *FirestoreSource[K, V]) WriteToCache(ctx context.Context, key K, value V) error {
+	stringKey := fmt.Sprintf("%v", key)
+	_, err := s.client.Collection(s.collectionName).Doc(stringKey).Set(ctx, value)
+	if err != nil {
+		s.logger.Error().Err(err).Str("key", stringKey).Msg("Failed to write document to Firestore.")
+		return fmt.Errorf("firestore set for %s: %w", stringKey, err)
+	}
+	s.logger.Debug().Str("key", stringKey).Msg("Successfully wrote data to Firestore.")
+	return nil
+}
