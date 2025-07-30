@@ -13,10 +13,14 @@ import (
 
 // BaseConfig holds common configuration fields for all services.
 type BaseConfig struct {
-	LogLevel        string `mapstructure:"log_level"`
-	HTTPPort        string `mapstructure:"http_port"`
-	ProjectID       string `mapstructure:"project_id"`
-	CredentialsFile string `mapstructure:"credentials_file"`
+	LogLevel        string `yaml:"log_level"`
+	HTTPPort        string `yaml:"http_port"`
+	ProjectID       string `yaml:"project_id"`
+	CredentialsFile string `yaml:"credentials_file"`
+
+	ServiceName        string `yaml:"service_name"`
+	DataflowName       string `yaml:"dataflow_name"`
+	ServiceDirectorURL string `yaml:"service_director_url"`
 }
 
 // Service defines the common interface for all microservices.
