@@ -66,7 +66,7 @@ func (c *MqttConsumer) Start(ctx context.Context) error {
 }
 
 // Stop gracefully ceases message consumption.
-func (c *MqttConsumer) Stop(ctx context.Context) error {
+func (c *MqttConsumer) Stop(_ context.Context) error {
 	c.stopOnce.Do(func() {
 		c.logger.Info().Msg("Stopping MqttConsumer...")
 		if c.pahoClient != nil && c.pahoClient.IsConnected() {

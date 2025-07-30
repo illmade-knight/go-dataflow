@@ -111,7 +111,7 @@ func (s *EnrichmentService) worker(ctx context.Context, workerID int) {
 }
 
 // processConsumedMessage contains the core logic for a single message.
-func (s *EnrichmentService) processConsumedMessage(ctx context.Context, msg *messagepipeline.Message, workerID int) {
+func (s *EnrichmentService) processConsumedMessage(ctx context.Context, msg *messagepipeline.Message, _ int) {
 	skip, err := s.enricher(ctx, msg)
 	if err != nil {
 		s.logger.Error().Err(err).Str("msg_id", msg.ID).Msg("Enricher failed, Nacking.")

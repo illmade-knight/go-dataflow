@@ -105,7 +105,7 @@ func TestIceStorageService_Integration(t *testing.T) {
 			t.Cleanup(func() { _ = psClient.Close() })
 
 			// --- Initialize Service Components ---
-			consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(testProjectID)
+			consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
 			consumerCfg.SubscriptionID = testSubscriptionID
 			consumer, err := messagepipeline.NewGooglePubsubConsumer(testCtx, consumerCfg, psClient, logger)
 			require.NoError(t, err)

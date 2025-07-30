@@ -32,7 +32,7 @@ func TestGooglePubsubConsumer_Lifecycle_And_MessageReception(t *testing.T) {
 	clientOptions := emulatorConn.ClientOptions
 
 	// Configure the consumer
-	cfg := messagepipeline.NewGooglePubsubConsumerDefaults(projectID)
+	cfg := messagepipeline.NewGooglePubsubConsumerDefaults()
 	cfg.SubscriptionID = subID
 	cfg.MaxOutstandingMessages = 1
 	cfg.NumGoroutines = 1

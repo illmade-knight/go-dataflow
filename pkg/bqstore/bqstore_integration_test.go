@@ -79,12 +79,12 @@ func TestBigQueryService_Integration_FullFlow(t *testing.T) {
 	t.Cleanup(func() { _ = bqClient.Close() })
 
 	// --- Initialize Pipeline Components ---
-	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(testProjectID)
+	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
 	consumerCfg.SubscriptionID = testInputSubscriptionID
 	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, psClient, logger)
 	require.NoError(t, err)
 
-	bqInserterCfg := &bqstore.BigQueryDatasetConfig{ProjectID: testProjectID, DatasetID: testBigQueryDatasetID, TableID: testBigQueryTableID}
+	bqInserterCfg := &bqstore.BigQueryDatasetConfig{DatasetID: testBigQueryDatasetID, TableID: testBigQueryTableID}
 	bqInserter, err := bqstore.NewBigQueryInserter[MonitorReadings](ctx, bqClient, bqInserterCfg, logger)
 	require.NoError(t, err)
 

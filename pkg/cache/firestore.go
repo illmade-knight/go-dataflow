@@ -1,4 +1,3 @@
-// cache/firestore.go
 package cache
 
 import (

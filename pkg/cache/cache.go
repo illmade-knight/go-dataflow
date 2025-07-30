@@ -1,4 +1,3 @@
-// cache/cache.go
 package cache
 
 import "context"

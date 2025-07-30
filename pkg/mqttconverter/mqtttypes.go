@@ -1,4 +1,3 @@
-// mqttconverter/types.go
 package mqttconverter
 
 import "time"

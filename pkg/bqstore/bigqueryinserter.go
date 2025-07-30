@@ -20,7 +20,6 @@ type DataBatchInserter[T any] interface {
 
 // BigQueryDatasetConfig holds configuration for a BigQuery dataset and table.
 type BigQueryDatasetConfig struct {
-	ProjectID       string
 	DatasetID       string
 	TableID         string
 	CredentialsFile string // Optional: Path to a service account JSON file.

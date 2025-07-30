@@ -233,13 +233,13 @@ func (m *MockMessageConsumer) Close() {
 func (m *MockMessageConsumer) Messages() <-chan messagepipeline.Message {
 	return m.msgChan
 }
-func (m *MockMessageConsumer) Start(ctx context.Context) error {
+func (m *MockMessageConsumer) Start(_ context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.startCount++
 	return nil
 }
-func (m *MockMessageConsumer) Stop(ctx context.Context) error {
+func (m *MockMessageConsumer) Stop(_ context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stopCount++

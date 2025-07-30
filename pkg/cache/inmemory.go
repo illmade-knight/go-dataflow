@@ -1,4 +1,3 @@
-// cache/inmemory.go
 package cache
 
 import (
@@ -22,7 +21,7 @@ func NewInMemoryCache[K comparable, V any]() *InMemoryCache[K, V] {
 }
 
 // FetchFromCache retrieves an item from the cache.
-func (c *InMemoryCache[K, V]) FetchFromCache(ctx context.Context, key K) (V, error) {
+func (c *InMemoryCache[K, V]) FetchFromCache(_ context.Context, key K) (V, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -35,7 +34,7 @@ func (c *InMemoryCache[K, V]) FetchFromCache(ctx context.Context, key K) (V, err
 }
 
 // WriteToCache adds an item to the cache.
-func (c *InMemoryCache[K, V]) WriteToCache(ctx context.Context, key K, value V) error {
+func (c *InMemoryCache[K, V]) WriteToCache(_ context.Context, key K, value V) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.data[key] = value

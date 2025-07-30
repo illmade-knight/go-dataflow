@@ -47,7 +47,7 @@ func TestMqttPipeline_Integration(t *testing.T) {
 	consumer, err := mqttconverter.NewMqttConsumer(mqttCfg, logger)
 	require.NoError(t, err)
 
-	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults(projectID, outputTopicID)
+	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
 	producer, err := messagepipeline.NewGooglePubsubProducer(ctx, producerCfg, psClient, logger)
 	require.NoError(t, err)
 	t.Cleanup(producer.Stop)

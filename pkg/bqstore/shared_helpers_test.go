@@ -69,7 +69,7 @@ func (m *MockMessageConsumer) Start(ctx context.Context) error {
 	}()
 	return nil
 }
-func (m *MockMessageConsumer) Stop(ctx context.Context) error {
+func (m *MockMessageConsumer) Stop(_ context.Context) error {
 	m.stopOnce.Do(func() {
 		close(m.msgChan)
 		close(m.doneChan)

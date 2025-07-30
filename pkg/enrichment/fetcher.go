@@ -1,4 +1,3 @@
-// enrichment/fetcher.go
 package enrichment
 
 import (

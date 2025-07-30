@@ -22,9 +22,8 @@ type GooglePubsubProducerConfig struct {
 }
 
 // NewGooglePubsubProducerDefaults provides a config with sensible defaults.
-func NewGooglePubsubProducerDefaults(projectID, topicID string) *GooglePubsubProducerConfig {
+func NewGooglePubsubProducerDefaults() *GooglePubsubProducerConfig {
 	return &GooglePubsubProducerConfig{
-		TopicID:            topicID,
 		TopicExistsTimeout: 20 * time.Second,
 		BatchDelay:         100 * time.Millisecond,
 		BatchSize:          100,

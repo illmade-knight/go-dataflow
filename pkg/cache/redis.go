@@ -1,4 +1,3 @@
-// cache/redis.go
 package cache
 
 import (
@@ -41,7 +40,7 @@ func NewRedisCache[K comparable, V any](
 	})
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		rdb.Close()
+		_ = rdb.Close()
 		return nil, fmt.Errorf("failed to connect to redis: %w", err)
 	}
 

@@ -3,6 +3,7 @@ package messagepipeline_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sync"
@@ -79,7 +80,8 @@ func TestGooglePubsubProducer_Publish(t *testing.T) {
 
 	pubsubClient, _, subscription := setupTestPubsub(t, projectID, topicID, subID)
 
-	producerConfig := messagepipeline.NewGooglePubsubProducerDefaults(projectID, topicID)
+	producerConfig := messagepipeline.NewGooglePubsubProducerDefaults()
+	producerConfig.TopicID = topicID
 
 	producer, err := messagepipeline.NewGooglePubsubProducer(testCtx, producerConfig, pubsubClient, zerolog.Nop())
 	require.NoError(t, err)
@@ -121,7 +123,7 @@ func TestGooglePubsubProducer_Publish(t *testing.T) {
 			msg.Ack()
 			receiveCancel() // Stop receiving after the first message.
 		})
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			log.Error().Err(err).Msg("Receive error")
 		}
 	}()

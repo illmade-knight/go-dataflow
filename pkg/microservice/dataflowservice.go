@@ -3,6 +3,7 @@ package microservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -71,7 +72,7 @@ func (s *BaseServer) Start() error {
 	s.Logger.Info().Str("address", s.actualAddr).Msg("HTTP server starting to listen")
 
 	go func() {
-		if err := s.httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+		if err := s.httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.Logger.Error().Err(err).Msg("HTTP server failed")
 		}
 	}()
@@ -108,7 +109,7 @@ func (s *BaseServer) Mux() *http.ServeMux {
 }
 
 // HealthzHandler responds to health check probes.
-func HealthzHandler(w http.ResponseWriter, r *http.Request) {
+func HealthzHandler(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("OK"))
 }
