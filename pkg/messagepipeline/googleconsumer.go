@@ -12,7 +12,6 @@ import (
 
 // GooglePubsubConsumerConfig holds all configuration for the GooglePubsubConsumer.
 type GooglePubsubConsumerConfig struct {
-	ProjectID                 string
 	SubscriptionID            string
 	MaxOutstandingMessages    int
 	NumGoroutines             int
@@ -20,9 +19,8 @@ type GooglePubsubConsumerConfig struct {
 }
 
 // NewGooglePubsubConsumerDefaults provides a config with sensible defaults.
-func NewGooglePubsubConsumerDefaults(projectID string) *GooglePubsubConsumerConfig {
+func NewGooglePubsubConsumerDefaults() *GooglePubsubConsumerConfig {
 	return &GooglePubsubConsumerConfig{
-		ProjectID:                 projectID,
 		MaxOutstandingMessages:    100,
 		NumGoroutines:             5,
 		SubscriptionExistsTimeout: 20 * time.Second,

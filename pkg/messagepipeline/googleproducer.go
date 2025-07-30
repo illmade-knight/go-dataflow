@@ -12,8 +12,7 @@ import (
 
 // GooglePubsubProducerConfig holds configuration for the Google Pub/Sub producer.
 type GooglePubsubProducerConfig struct {
-	ProjectID string
-	TopicID   string
+	TopicID string
 	// Timeout for the initial check to see if the topic exists.
 	TopicExistsTimeout time.Duration
 	// Batching settings for the underlying Google Pub/Sub client.
@@ -25,7 +24,6 @@ type GooglePubsubProducerConfig struct {
 // NewGooglePubsubProducerDefaults provides a config with sensible defaults.
 func NewGooglePubsubProducerDefaults(projectID, topicID string) *GooglePubsubProducerConfig {
 	return &GooglePubsubProducerConfig{
-		ProjectID:          projectID,
 		TopicID:            topicID,
 		TopicExistsTimeout: 20 * time.Second,
 		BatchDelay:         100 * time.Millisecond,
