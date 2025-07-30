@@ -44,8 +44,7 @@ type ProcessableItem[T any] struct {
 // messages of type T one by one.
 type StreamProcessor[T any] func(ctx context.Context, original Message, payload *T) error
 
-// BatchProcessor defines the contract for an endpoint that handles batches of
-// transformed messages of type T.
+// BatchProcessor defines the contract for an endpoint that handles batches of transformed messages of type T.
 type BatchProcessor[T any] func(ctx context.Context, batch []ProcessableItem[T]) error
 
 // MessageProcessor defines the contract for an endpoint that handles an enriched
