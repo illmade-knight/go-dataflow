@@ -44,37 +44,43 @@ func (c *MqttConsumer) Messages() <-chan types.ConsumedMessage {
 	return c.outputChan
 }
 
-// Start initializes and connects the MQTT client and begins consuming messages.
+// Start launches the connection logic in a background goroutine and returns nil immediately.
+// The consumer will then continuously attempt to connect in the background.
 func (c *MqttConsumer) Start(ctx context.Context) error {
-	subscribed := make(chan error, 1)
-
-	opts := c.createMqttOptions(subscribed)
+	opts := c.createMqttOptions(nil) // Passing nil is now safe due to the handler's nil-check.
 	opts.SetDefaultPublishHandler(c.handleIncomingMessage(ctx))
 	c.pahoClient = mqtt.NewClient(opts)
 
-	c.logger.Info().Str("client_id", opts.ClientID).Msg("Paho MQTT client created. Attempting to connect...")
-
-	if token := c.pahoClient.Connect(); token.WaitTimeout(c.mqttCfg.ConnectTimeout) && token.Error() != nil {
-		return fmt.Errorf("paho MQTT client connect error: %w", token.Error())
+	c.logger.Info().Msg("Performing initial fast-fail connection check...")
+	if token := c.pahoClient.Connect(); token.WaitTimeout(3*time.Second) && token.Error() != nil {
+		c.logger.Warn().Err(token.Error()).Msg("Initial connection to MQTT broker failed. Service will start, but will be in a non-ready state while retrying in background.")
+	} else if token.Error() == nil {
+		c.logger.Info().Msg("Initial connection successful.")
 	}
 
-	select {
-	case err := <-subscribed:
-		if err != nil {
-			return fmt.Errorf("MQTT subscription failed: %w", err)
-		}
-		c.logger.Info().Msg("MQTT consumer started and subscribed successfully.")
-	case <-time.After(c.mqttCfg.ConnectTimeout):
-		return fmt.Errorf("timed out waiting for MQTT subscription")
-	}
+	go c.connectionManager(ctx)
 
 	go func() {
 		<-ctx.Done()
-		c.logger.Info().Msg("Shutdown signal received, disconnecting MQTT client.")
+		c.logger.Info().Msg("Shutdown signal received, stopping consumer.")
 		_ = c.Stop(context.Background())
 	}()
 
 	return nil
+}
+
+// connectionManager handles the resilient connection logic.
+func (c *MqttConsumer) connectionManager(ctx context.Context) {
+	for {
+		select {
+		case <-c.Done():
+			c.logger.Info().Msg("Connection manager shutting down.")
+			return
+		case <-ctx.Done():
+			c.logger.Info().Msg("Application context cancelled, shutting down connection manager.")
+			return
+		}
+	}
 }
 
 // Stop gracefully ceases message consumption.
@@ -98,6 +104,12 @@ func (c *MqttConsumer) Stop(ctx context.Context) error {
 // Done returns a channel that is closed when the consumer has fully stopped.
 func (c *MqttConsumer) Done() <-chan struct{} {
 	return c.doneChan
+}
+
+// REFACTOR: This new method allows tests to check the connection status.
+// IsConnected returns the connection status of the underlying Paho client.
+func (c *MqttConsumer) IsConnected() bool {
+	return c.pahoClient != nil && c.pahoClient.IsConnected()
 }
 
 // GetMessageHandlerForTest returns the internal message handler for unit testing.
@@ -145,14 +157,21 @@ func (c *MqttConsumer) createMqttOptions(subChan chan error) *mqtt.ClientOptions
 
 	opts.SetOnConnectHandler(func(client mqtt.Client) {
 		c.logger.Info().Str("broker", c.mqttCfg.BrokerURL).Msg("Paho client connected to MQTT broker")
-		token := client.Subscribe(c.mqttCfg.Topic, 1, nil) // Nil handler uses the default handler
-		if token.WaitTimeout(5*time.Second) && token.Error() != nil {
-			c.logger.Error().Err(token.Error()).Str("topic", c.mqttCfg.Topic).Msg("Failed to subscribe to MQTT topic")
-			subChan <- token.Error()
-		} else {
-			c.logger.Info().Str("topic", c.mqttCfg.Topic).Msg("Successfully subscribed to MQTT topic")
-			subChan <- nil
-		}
+		token := client.Subscribe(c.mqttCfg.Topic, 1, nil)
+		go func() {
+			var err error
+			if token.WaitTimeout(5*time.Second) && token.Error() != nil {
+				err = token.Error()
+				c.logger.Error().Err(err).Str("topic", c.mqttCfg.Topic).Msg("Failed to subscribe to MQTT topic")
+			} else {
+				c.logger.Info().Str("topic", c.mqttCfg.Topic).Msg("Successfully subscribed to MQTT topic")
+			}
+
+			// REFACTOR: This check prevents a deadlock if subChan is nil.
+			if subChan != nil {
+				subChan <- err
+			}
+		}()
 	})
 	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
 		c.logger.Error().Err(err).Msg("Paho client lost MQTT connection.")

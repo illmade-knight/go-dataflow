@@ -26,7 +26,6 @@ type CachedFetcher[K any, V any] interface {
 	io.Closer
 }
 
-// REFACTOR: Added a config struct for the fetcher.
 // FetcherConfig holds configuration for the cache-fallback fetcher.
 type FetcherConfig struct {
 	CacheWriteTimeout time.Duration

@@ -46,11 +46,9 @@ func TestMqttPipeline_Integration(t *testing.T) {
 	mqttCfg.Topic = mqttTopic
 	mqttCfg.ClientIDPrefix = "ingestion-test-"
 
-	// The consumer is now self-contained and creates its own Paho client.
 	consumer, err := mqttconverter.NewMqttConsumer(mqttCfg, logger)
 	require.NoError(t, err)
 
-	// Create a standard Pub/Sub producer for the output.
 	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults(projectID)
 	producerCfg.ProjectID = projectID
 	producerCfg.TopicID = outputTopicID
@@ -82,6 +80,12 @@ func TestMqttPipeline_Integration(t *testing.T) {
 	t.Cleanup(func() { mqttTestPubClient.Disconnect(250) })
 
 	processedSub := psClient.Subscription(outputSubID)
+
+	// REFACTOR: Wait for the consumer to connect before publishing.
+	// This resolves the race condition caused by the consumer's asynchronous startup.
+	require.Eventually(t, func() bool {
+		return consumer.IsConnected()
+	}, 10*time.Second, 250*time.Millisecond, "MQTT consumer did not connect in time")
 
 	// --- 5. Publish Test Message and Verify ---
 	devicePayload := map[string]interface{}{"value": 42, "status": "ok"}

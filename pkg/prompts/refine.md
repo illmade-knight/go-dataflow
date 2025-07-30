@@ -73,6 +73,13 @@ Can you start by looking at these files and giving a general overview and refact
 We prefer a pattern of suggested action, agreement, then implementation - 
 do not just jump into creating new code until the plan for the refactor is agreed
 
+If we are ready we can start refactoring. 
+First give me a list of all the files we expect to be touched in the refactor (including tests)- 
+at the end of any files refactor give me the list again with all the completed refactors indicated. 
+Where appropriate indicate if we need a unit or integration test for the refactored file.
+If the refactor revisits a previously refactored file indicate this and whether the refactor effects tests or other files 
+(these will be then be added into our list of touched files)
+
 ## On good outcome
 The initial review should be exactly the same as that for the other packages. 
 Pay particular attention to the use of context. Review NewFunc() parameter order. Document correctly. 
