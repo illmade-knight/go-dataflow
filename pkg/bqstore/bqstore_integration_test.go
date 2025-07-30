@@ -34,7 +34,7 @@ type TestUpstreamMessage struct {
 }
 
 // ConsumedMessageTransformer implements the MessageTransformer logic for this test.
-func ConsumedMessageTransformer(_ context.Context, msg messagepipeline.Message) (*MonitorReadings, bool, error) {
+func ConsumedMessageTransformer(_ context.Context, msg *messagepipeline.Message) (*MonitorReadings, bool, error) {
 	var upstreamMsg TestUpstreamMessage
 	if err := json.Unmarshal(msg.Payload, &upstreamMsg); err != nil {
 		return nil, false, fmt.Errorf("failed to unmarshal upstream message: %w", err)

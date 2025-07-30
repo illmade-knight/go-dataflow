@@ -38,7 +38,7 @@ func setupTestService(t *testing.T, transformer messagepipeline.MessageTransform
 
 func TestBigQueryService_ProcessesMessagesSuccessfully(t *testing.T) {
 	// Arrange
-	testTransformer := func(ctx context.Context, msg messagepipeline.Message) (*testPayload, bool, error) {
+	testTransformer := func(ctx context.Context, msg *messagepipeline.Message) (*testPayload, bool, error) {
 		var p testPayload
 		err := json.Unmarshal(msg.Payload, &p)
 		return &p, false, err
@@ -80,7 +80,7 @@ func TestBigQueryService_ProcessesMessagesSuccessfully(t *testing.T) {
 
 func TestBigQueryService_HandlesTransformerError(t *testing.T) {
 	// Arrange
-	errorTransformer := func(ctx context.Context, msg messagepipeline.Message) (*testPayload, bool, error) {
+	errorTransformer := func(ctx context.Context, msg *messagepipeline.Message) (*testPayload, bool, error) {
 		return nil, false, errors.New("bad data")
 	}
 	service, mockConsumer, mockInserter := setupTestService(t, errorTransformer)

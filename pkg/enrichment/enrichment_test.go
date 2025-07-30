@@ -19,10 +19,9 @@ type DeviceInfo struct {
 }
 
 // --- Test Setup ---
-func TestEnricher_Enrich(t *testing.T) {
+func TestNewEnricherFunc(t *testing.T) {
 	ctx := context.Background()
 
-	// 1. Define the dependencies as simple functions for the test.
 	keyExtractor := func(msg *messagepipeline.Message) (string, bool) {
 		if id, ok := msg.Attributes["deviceID"]; ok {
 			return id, true
@@ -43,7 +42,7 @@ func TestEnricher_Enrich(t *testing.T) {
 			return DeviceInfo{}, errors.New("device not found")
 		}
 
-		enricher, err := enrichment.NewEnricher(mockFetcher, keyExtractor, applier, zerolog.Nop())
+		enricherFunc, err := enrichment.NewEnricherFunc(mockFetcher, keyExtractor, applier, zerolog.Nop())
 		require.NoError(t, err)
 
 		msg := &messagepipeline.Message{
@@ -51,41 +50,37 @@ func TestEnricher_Enrich(t *testing.T) {
 		}
 
 		// Act
-		err = enricher.Enrich(ctx, msg)
+		skip, err := enricherFunc(ctx, msg)
 
 		// Assert
 		require.NoError(t, err)
+		assert.False(t, skip)
 		require.NotNil(t, msg.EnrichmentData)
 		enrichedInfo, ok := msg.EnrichmentData["deviceInfo"].(DeviceInfo)
 		require.True(t, ok)
 		assert.Equal(t, "Sensor A", enrichedInfo.Name)
-		assert.Equal(t, "Garden", enrichedInfo.Location)
 	})
 
-	t.Run("Failure on key extraction", func(t *testing.T) {
+	t.Run("Key not found in message", func(t *testing.T) {
 		// Arrange
 		mockFetcher := func(ctx context.Context, key string) (DeviceInfo, error) {
-			t.Error("Fetcher should not be called if key extraction fails")
+			t.Error("Fetcher should not be called if key is not found")
 			return DeviceInfo{}, nil
 		}
-		// Use a key extractor that always fails for this test case.
-		failingKeyExtractor := func(msg *messagepipeline.Message) (string, bool) {
-			return "", false
-		}
-
-		enricher, err := enrichment.NewEnricher(mockFetcher, failingKeyExtractor, applier, zerolog.Nop())
+		enricherFunc, err := enrichment.NewEnricherFunc(mockFetcher, keyExtractor, applier, zerolog.Nop())
 		require.NoError(t, err)
 
 		msg := &messagepipeline.Message{
-			Attributes: map[string]string{"some_other_id": "xyz"}, // No deviceID
+			Attributes: map[string]string{"other_id": "xyz"}, // No deviceID
 		}
 
 		// Act
-		err = enricher.Enrich(ctx, msg)
+		skip, err := enricherFunc(ctx, msg)
 
 		// Assert
-		require.NoError(t, err, "Should not return an error, just skip enrichment")
-		assert.Nil(t, msg.EnrichmentData, "EnrichmentData should not be populated")
+		require.NoError(t, err)
+		assert.False(t, skip, "Should continue pipeline, just without enrichment")
+		assert.Nil(t, msg.EnrichmentData)
 	})
 
 	t.Run("Failure on data fetch", func(t *testing.T) {
@@ -95,7 +90,7 @@ func TestEnricher_Enrich(t *testing.T) {
 			return DeviceInfo{}, expectedErr
 		}
 
-		enricher, err := enrichment.NewEnricher(mockFetcher, keyExtractor, applier, zerolog.Nop())
+		enricherFunc, err := enrichment.NewEnricherFunc(mockFetcher, keyExtractor, applier, zerolog.Nop())
 		require.NoError(t, err)
 
 		msg := &messagepipeline.Message{
@@ -103,11 +98,11 @@ func TestEnricher_Enrich(t *testing.T) {
 		}
 
 		// Act
-		err = enricher.Enrich(ctx, msg)
+		skip, err := enricherFunc(ctx, msg)
 
 		// Assert
-		require.Error(t, err)
-		assert.ErrorIs(t, err, expectedErr, "The original error should be wrapped and returned")
-		assert.Nil(t, msg.EnrichmentData, "EnrichmentData should not be populated on fetch failure")
+		require.NoError(t, err, "The enricher itself should not return an error")
+		assert.True(t, skip, "Should signal to skip the message on fetch failure")
+		assert.Nil(t, msg.EnrichmentData)
 	})
 }

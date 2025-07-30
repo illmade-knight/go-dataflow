@@ -13,48 +13,41 @@ import (
 // --- Stage 1: Consumer ---
 
 // MessageConsumer defines the interface for a message source (e.g., Pub/Sub, Kafka).
-// It is responsible for creating the initial `Message` objects.
 type MessageConsumer interface {
-	// Messages returns the read-only channel where consumed messages are sent.
 	Messages() <-chan Message
-
-	// Start begins the message consumption process. The provided context manages
-	// the lifecycle of the consumer's background operations.
 	Start(ctx context.Context) error
-
-	// Stop gracefully shuts down the consumer, respecting the provided context's deadline.
 	Stop(ctx context.Context) error
-
-	// Done returns a channel that is closed when the consumer has fully stopped.
-	// This is useful for orchestrating graceful shutdowns.
 	Done() <-chan struct{}
 }
 
-// --- Stage 2: Transformer ---
+// --- Stage 2: Transformer / Enricher ---
 
-// MessageTransformer defines a function that transforms a generic `Message` into a
-// specific, structured payload of type T. This is the bridge between the generic
-// pipeline and domain-specific data structures.
-//
-// It can also signal to skip the message, preventing it from reaching the processor.
-type MessageTransformer[T any] func(ctx context.Context, msg Message) (payload *T, skip bool, err error)
+// MessageTransformer defines a function that **transforms** a generic `Message` into a
+// new, specific, structured payload of type T. This is used by the generic
+// StreamingService and BatchingService.
+type MessageTransformer[T any] func(ctx context.Context, msg *Message) (payload *T, skip bool, err error)
+
+// MessageEnricher defines a function that **enriches** a `Message` in-place by
+// modifying its fields (e.g., EnrichmentData). It does not return a new payload.
+// This is used by the specialized, non-generic EnrichmentService.
+type MessageEnricher func(ctx context.Context, msg *Message) (skip bool, err error)
 
 // --- Stage 3: Processor ---
 
-// ProcessableItem links a successfully transformed payload of type T with its
-// original raw `Message`. This is essential for batch processors that need to Ack/Nack
-// the original message after a batch operation completes.
+// ProcessableItem links a transformed payload with its original message for Ack/Nack.
 type ProcessableItem[T any] struct {
 	Original Message
 	Payload  *T
 }
 
-// StreamProcessor defines the contract for an endpoint that handles messages
-// one by one. It receives the original message for context (e.g., for Ack/Nack)
-// and the transformed, type-safe payload.
+// StreamProcessor defines the contract for an endpoint that handles transformed
+// messages of type T one by one.
 type StreamProcessor[T any] func(ctx context.Context, original Message, payload *T) error
 
-// BatchProcessor defines the contract for an endpoint that handles messages
-// in batches. It receives a slice of ProcessableItem, allowing it to operate
-// on the typed payloads while retaining access to the original messages.
+// BatchProcessor defines the contract for an endpoint that handles batches of
+// transformed messages of type T.
 type BatchProcessor[T any] func(ctx context.Context, batch []ProcessableItem[T]) error
+
+// MessageProcessor defines the contract for an endpoint that handles an enriched
+// message. This is the non-generic counterpart to the StreamProcessor.
+type MessageProcessor func(ctx context.Context, msg *Message) error

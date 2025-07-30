@@ -23,7 +23,7 @@ func (d *ArchivalData) GetBatchKey() string {
 
 // ArchivalTransformer is a MessageTransformer function that converts a generic
 // Message into the icestore-specific ArchivalData format.
-func ArchivalTransformer(ctx context.Context, msg messagepipeline.Message) (*ArchivalData, bool, error) {
+func ArchivalTransformer(ctx context.Context, msg *messagepipeline.Message) (*ArchivalData, bool, error) {
 	var ts time.Time
 
 	// Allow overriding timestamp for testing purposes.

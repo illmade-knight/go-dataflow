@@ -126,7 +126,7 @@ func (s *StreamingService[T]) worker(ctx context.Context, workerID int) {
 func (s *StreamingService[T]) processConsumedMessage(ctx context.Context, msg Message, workerID int) {
 	s.logger.Debug().Int("worker_id", workerID).Str("msg_id", msg.ID).Msg("Transforming message.")
 
-	transformedPayload, skip, err := s.transformer(ctx, msg)
+	transformedPayload, skip, err := s.transformer(ctx, &msg)
 	if err != nil {
 		s.logger.Error().Err(err).Str("msg_id", msg.ID).Msg("Failed to transform message, Nacking.")
 		msg.Nack()

@@ -131,7 +131,7 @@ func (s *BatchingService[T]) transformWorker(ctx context.Context, workerID int) 
 				return
 			}
 
-			payload, skip, err := s.transformer(ctx, msg)
+			payload, skip, err := s.transformer(ctx, &msg)
 			if err != nil {
 				s.logger.Error().Err(err).Str("msg_id", msg.ID).Msg("Failed to transform message, Nacking.")
 				msg.Nack()

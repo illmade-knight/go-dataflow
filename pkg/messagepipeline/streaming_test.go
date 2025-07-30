@@ -32,7 +32,7 @@ func newTestStreamingService(
 		consumer.Close()
 	})
 
-	transformer := func(ctx context.Context, msg messagepipeline.Message) (*streamTestPayload, bool, error) {
+	transformer := func(ctx context.Context, msg *messagepipeline.Message) (*streamTestPayload, bool, error) {
 		if string(msg.Payload) == "skip" {
 			return nil, true, nil
 		}
