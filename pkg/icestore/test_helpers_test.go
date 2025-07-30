@@ -1,4 +1,4 @@
-package icestore
+package icestore_test
 
 import (
 	"bytes"
@@ -6,112 +6,106 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/illmade-knight/go-dataflow/pkg/types"
+	"github.com/illmade-knight/go-dataflow/pkg/icestore"
+	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 )
 
-// --- Mock GCS Client Components ---
+// =============================================================================
+// Mocks for Black-Box Testing
+// =============================================================================
 
-// mockGCSWriter is a mock GCSWriter that writes to an in-memory buffer.
+// --- Mock GCS Client with Failure Injection ---
+
 type mockGCSWriter struct {
-	buf    bytes.Buffer
-	closed bool
+	buf         bytes.Buffer
+	mu          sync.Mutex
+	shouldError bool
+	closed      bool
 }
 
 func (m *mockGCSWriter) Write(p []byte) (n int, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.closed {
 		return 0, errors.New("write on closed writer")
 	}
+	if m.shouldError {
+		return 0, errors.New("mock gcs write error")
+	}
 	return m.buf.Write(p)
 }
-
 func (m *mockGCSWriter) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.closed {
 		return errors.New("already closed")
 	}
 	m.closed = true
+	if m.shouldError {
+		return errors.New("mock gcs close error")
+	}
 	return nil
 }
-
-// mockGCSObjectHandle is a mock GCSObjectHandle.
-type mockGCSObjectHandle struct {
-	writer *mockGCSWriter
+func (m *mockGCSWriter) Bytes() []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.buf.Bytes()
 }
 
-func (m *mockGCSObjectHandle) NewWriter(_ context.Context) GCSWriter {
-	if m.writer == nil {
-		m.writer = &mockGCSWriter{}
-	}
-	return m.writer
-}
+type mockGCSObjectHandle struct{ writer icestore.GCSWriter }
 
-// mockGCSBucketHandle is a mock GCSBucketHandle that stores created objects in a map.
+func (m *mockGCSObjectHandle) NewWriter(_ context.Context) icestore.GCSWriter { return m.writer }
+
 type mockGCSBucketHandle struct {
-	sync.Mutex
-	objects map[string]*mockGCSObjectHandle
+	mu                sync.Mutex
+	objects           map[string]icestore.GCSObjectHandle
+	writersShouldFail bool
 }
 
-func (m *mockGCSBucketHandle) Object(name string) GCSObjectHandle {
-	m.Lock()
-	defer m.Unlock()
-	if m.objects == nil {
-		m.objects = make(map[string]*mockGCSObjectHandle)
-	}
+func (m *mockGCSBucketHandle) Object(name string) icestore.GCSObjectHandle {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, ok := m.objects[name]; !ok {
-		m.objects[name] = &mockGCSObjectHandle{}
+		m.objects[name] = &mockGCSObjectHandle{
+			writer: &mockGCSWriter{shouldError: m.writersShouldFail},
+		}
 	}
 	return m.objects[name]
 }
 
-// mockGCSClient is a mock GCSClient.
 type mockGCSClient struct {
 	bucket *mockGCSBucketHandle
 }
 
-func newMockGCSClient() *mockGCSClient {
+func newMockGCSClient(writersShouldFail bool) *mockGCSClient {
 	return &mockGCSClient{
-		bucket: &mockGCSBucketHandle{},
+		bucket: &mockGCSBucketHandle{
+			objects:           make(map[string]icestore.GCSObjectHandle),
+			writersShouldFail: writersShouldFail,
+		},
 	}
 }
+func (m *mockGCSClient) Bucket(_ string) icestore.GCSBucketHandle { return m.bucket }
 
-func (m *mockGCSClient) Bucket(_ string) GCSBucketHandle {
-	return m.bucket
-}
+// --- Mock Message Consumer ---
 
-// MockMessageConsumer is a local mock implementation of the messagepipeline.MessageConsumer interface.
-type MockMessageConsumer struct {
-	msgChan  chan types.ConsumedMessage
-	doneChan chan struct{}
+type mockMessageConsumer struct {
+	msgChan  chan messagepipeline.Message
 	stopOnce sync.Once
 }
 
-func NewMockMessageConsumer(bufferSize int) *MockMessageConsumer {
-	return &MockMessageConsumer{
-		msgChan:  make(chan types.ConsumedMessage, bufferSize),
-		doneChan: make(chan struct{}),
-	}
+func newMockMessageConsumer(bufferSize int) *mockMessageConsumer {
+	return &mockMessageConsumer{msgChan: make(chan messagepipeline.Message, bufferSize)}
 }
-func (m *MockMessageConsumer) Messages() <-chan types.ConsumedMessage { return m.msgChan }
-func (m *MockMessageConsumer) Start(ctx context.Context) error {
-	go func() {
-		<-ctx.Done()
-		// Call Stop with a background context as the mock's shutdown is simple.
-		_ = m.Stop(context.Background())
-	}()
+func (m *mockMessageConsumer) Messages() <-chan messagepipeline.Message { return m.msgChan }
+func (m *mockMessageConsumer) Start(ctx context.Context) error          { return nil }
+func (m *mockMessageConsumer) Stop(_ context.Context) error {
+	m.stopOnce.Do(func() { close(m.msgChan) })
 	return nil
 }
-
-// REFACTOR: The Stop method now accepts a context to conform to the updated interface.
-func (m *MockMessageConsumer) Stop(_ context.Context) error {
-	m.stopOnce.Do(func() {
-		close(m.msgChan)
-		close(m.doneChan)
-	})
-	return nil
+func (m *mockMessageConsumer) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
 }
-func (m *MockMessageConsumer) Done() <-chan struct{} { return m.doneChan }
-func (m *MockMessageConsumer) Push(msg types.ConsumedMessage) {
-	select {
-	case m.msgChan <- msg:
-	default:
-	}
-}
+func (m *mockMessageConsumer) Push(msg messagepipeline.Message) { m.msgChan <- msg }

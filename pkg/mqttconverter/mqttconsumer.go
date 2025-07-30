@@ -1,4 +1,3 @@
-// mqttconverter/mqttconsumer.go
 package mqttconverter
 
 import (
@@ -6,13 +5,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/illmade-knight/go-dataflow/pkg/types"
 	"github.com/rs/zerolog"
 )
 
@@ -20,7 +19,7 @@ import (
 type MqttConsumer struct {
 	pahoClient mqtt.Client
 	logger     zerolog.Logger
-	outputChan chan types.ConsumedMessage
+	outputChan chan messagepipeline.Message
 	doneChan   chan struct{}
 	mqttCfg    *MQTTClientConfig
 	stopOnce   sync.Once
@@ -33,54 +32,37 @@ func NewMqttConsumer(cfg *MQTTClientConfig, logger zerolog.Logger) (*MqttConsume
 	}
 	return &MqttConsumer{
 		logger:     logger.With().Str("component", "MqttConsumer").Logger(),
-		outputChan: make(chan types.ConsumedMessage, 1000),
+		outputChan: make(chan messagepipeline.Message, 1000),
 		doneChan:   make(chan struct{}),
 		mqttCfg:    cfg,
 	}, nil
 }
 
 // Messages returns the read-only channel from which raw messages can be consumed.
-func (c *MqttConsumer) Messages() <-chan types.ConsumedMessage {
+func (c *MqttConsumer) Messages() <-chan messagepipeline.Message {
 	return c.outputChan
 }
 
-// Start launches the connection logic in a background goroutine and returns nil immediately.
-// The consumer will then continuously attempt to connect in the background.
+// Start launches the connection logic and begins consuming messages.
 func (c *MqttConsumer) Start(ctx context.Context) error {
-	opts := c.createMqttOptions(nil) // Passing nil is now safe due to the handler's nil-check.
+	opts := c.createMqttOptions()
 	opts.SetDefaultPublishHandler(c.handleIncomingMessage(ctx))
 	c.pahoClient = mqtt.NewClient(opts)
 
-	c.logger.Info().Msg("Performing initial fast-fail connection check...")
-	if token := c.pahoClient.Connect(); token.WaitTimeout(3*time.Second) && token.Error() != nil {
-		c.logger.Warn().Err(token.Error()).Msg("Initial connection to MQTT broker failed. Service will start, but will be in a non-ready state while retrying in background.")
+	c.logger.Info().Msg("Attempting to connect to MQTT broker...")
+	if token := c.pahoClient.Connect(); token.WaitTimeout(5*time.Second) && token.Error() != nil {
+		c.logger.Error().Err(token.Error()).Msg("Failed to connect to MQTT broker on startup. The Paho client will continue to retry in the background.")
 	} else if token.Error() == nil {
-		c.logger.Info().Msg("Initial connection successful.")
+		c.logger.Info().Msg("Initial connection to MQTT broker successful.")
 	}
-
-	go c.connectionManager(ctx)
 
 	go func() {
 		<-ctx.Done()
-		c.logger.Info().Msg("Shutdown signal received, stopping consumer.")
+		c.logger.Info().Msg("Shutdown signal received, ensuring consumer is stopped.")
 		_ = c.Stop(context.Background())
 	}()
 
 	return nil
-}
-
-// connectionManager handles the resilient connection logic.
-func (c *MqttConsumer) connectionManager(ctx context.Context) {
-	for {
-		select {
-		case <-c.Done():
-			c.logger.Info().Msg("Connection manager shutting down.")
-			return
-		case <-ctx.Done():
-			c.logger.Info().Msg("Application context cancelled, shutting down connection manager.")
-			return
-		}
-	}
 }
 
 // Stop gracefully ceases message consumption.
@@ -91,7 +73,7 @@ func (c *MqttConsumer) Stop(ctx context.Context) error {
 			if token := c.pahoClient.Unsubscribe(c.mqttCfg.Topic); token.WaitTimeout(2*time.Second) && token.Error() != nil {
 				c.logger.Warn().Err(token.Error()).Str("topic", c.mqttCfg.Topic).Msg("Failed to unsubscribe from MQTT topic.")
 			}
-			c.pahoClient.Disconnect(500)
+			c.pahoClient.Disconnect(500) // 500ms grace period
 			c.logger.Info().Msg("Paho MQTT client disconnected.")
 		}
 		close(c.outputChan)
@@ -106,8 +88,8 @@ func (c *MqttConsumer) Done() <-chan struct{} {
 	return c.doneChan
 }
 
-// REFACTOR: This new method allows tests to check the connection status.
 // IsConnected returns the connection status of the underlying Paho client.
+// This is useful for integration tests to wait until the consumer is ready.
 func (c *MqttConsumer) IsConnected() bool {
 	return c.pahoClient != nil && c.pahoClient.IsConnected()
 }
@@ -123,15 +105,19 @@ func (c *MqttConsumer) handleIncomingMessage(ctx context.Context) mqtt.MessageHa
 		c.logger.Debug().Str("topic", msg.Topic()).Msg("Received MQTT message")
 		payloadCopy := make([]byte, len(msg.Payload()))
 		copy(payloadCopy, msg.Payload())
-		consumedMsg := types.ConsumedMessage{
-			PublishMessage: types.PublishMessage{
+
+		consumedMsg := messagepipeline.Message{
+			MessageData: messagepipeline.MessageData{
 				ID:          fmt.Sprintf("%d", msg.MessageID()),
 				Payload:     payloadCopy,
 				PublishTime: time.Now().UTC(),
 			},
 			Attributes: map[string]string{"mqtt_topic": msg.Topic()},
-			Ack:        func() {},
-			Nack:       func() {},
+			// For MQTT with QoS > 0, the ack is handled at the protocol level by the Paho client.
+			// We provide empty functions to satisfy the interface, as no further action is needed
+			// from the pipeline to acknowledge the message with the broker.
+			Ack:  func() {},
+			Nack: func() {},
 		}
 		select {
 		case c.outputChan <- consumedMsg:
@@ -142,7 +128,7 @@ func (c *MqttConsumer) handleIncomingMessage(ctx context.Context) mqtt.MessageHa
 }
 
 // createMqttOptions assembles the Paho client options from the config.
-func (c *MqttConsumer) createMqttOptions(subChan chan error) *mqtt.ClientOptions {
+func (c *MqttConsumer) createMqttOptions() *mqtt.ClientOptions {
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(c.mqttCfg.BrokerURL)
 	uniqueSuffix := time.Now().UnixNano() % 1000000
@@ -156,20 +142,13 @@ func (c *MqttConsumer) createMqttOptions(subChan chan error) *mqtt.ClientOptions
 	opts.SetOrderMatters(false)
 
 	opts.SetOnConnectHandler(func(client mqtt.Client) {
-		c.logger.Info().Str("broker", c.mqttCfg.BrokerURL).Msg("Paho client connected to MQTT broker")
-		token := client.Subscribe(c.mqttCfg.Topic, 1, nil)
+		c.logger.Info().Str("broker", c.mqttCfg.BrokerURL).Msg("Paho client connected to MQTT broker.")
+		token := client.Subscribe(c.mqttCfg.Topic, 1, nil) // Subscribe with QoS 1
 		go func() {
-			var err error
 			if token.WaitTimeout(5*time.Second) && token.Error() != nil {
-				err = token.Error()
-				c.logger.Error().Err(err).Str("topic", c.mqttCfg.Topic).Msg("Failed to subscribe to MQTT topic")
+				c.logger.Error().Err(token.Error()).Str("topic", c.mqttCfg.Topic).Msg("Failed to subscribe to MQTT topic.")
 			} else {
-				c.logger.Info().Str("topic", c.mqttCfg.Topic).Msg("Successfully subscribed to MQTT topic")
-			}
-
-			// REFACTOR: This check prevents a deadlock if subChan is nil.
-			if subChan != nil {
-				subChan <- err
+				c.logger.Info().Str("topic", c.mqttCfg.Topic).Msg("Successfully subscribed to MQTT topic.")
 			}
 		}()
 	})

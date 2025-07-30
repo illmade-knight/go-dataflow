@@ -1,4 +1,3 @@
-// mqttconverter/mqtt_integration_test.go
 //go:build integration
 
 package mqttconverter_test
@@ -45,22 +44,31 @@ func TestMqttPipeline_Integration(t *testing.T) {
 	mqttCfg.BrokerURL = mqttConnection.EmulatorAddress
 	mqttCfg.Topic = mqttTopic
 	mqttCfg.ClientIDPrefix = "ingestion-test-"
-
 	consumer, err := mqttconverter.NewMqttConsumer(mqttCfg, logger)
 	require.NoError(t, err)
 
-	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults(projectID)
-	producerCfg.ProjectID = projectID
-	producerCfg.TopicID = outputTopicID
-	producer, err := messagepipeline.NewGooglePubsubProducer[mqttconverter.RawMessage](ctx, producerCfg, psClient, logger)
+	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults(projectID, outputTopicID)
+	producer, err := messagepipeline.NewGooglePubsubProducer(ctx, producerCfg, psClient, logger)
 	require.NoError(t, err)
+	t.Cleanup(producer.Stop)
 
-	// --- 3. Assemble the ProcessingService ---
-	service, err := messagepipeline.NewProcessingService[mqttconverter.RawMessage](
-		5, // Number of workers
+	processor := func(ctx context.Context, original messagepipeline.Message, payload *mqttconverter.RawMessage) error {
+		outgoingData := messagepipeline.MessageData{
+			ID:             original.ID,
+			Payload:        payload.Payload,
+			PublishTime:    payload.Timestamp,
+			EnrichmentData: map[string]interface{}{"mqttTopic": payload.Topic},
+		}
+		_, err := producer.Publish(ctx, outgoingData)
+		return err
+	}
+
+	// --- 3. Assemble the StreamingService ---
+	service, err := messagepipeline.NewStreamingService[mqttconverter.RawMessage](
+		messagepipeline.StreamingServiceConfig{NumWorkers: 5},
 		consumer,
-		producer,
 		mqttconverter.ToRawMessageTransformer,
+		processor,
 		logger,
 	)
 	require.NoError(t, err)
@@ -68,11 +76,12 @@ func TestMqttPipeline_Integration(t *testing.T) {
 	// --- 4. Start the Service and Test Clients ---
 	serviceCtx, serviceCancel := context.WithCancel(ctx)
 	t.Cleanup(serviceCancel)
-	go func() { _ = service.Start(serviceCtx) }()
+	err = service.Start(serviceCtx)
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stopCancel()
-		service.Stop(stopCtx)
+		_ = service.Stop(stopCtx)
 	})
 
 	mqttTestPubClient, err := emulators.CreateTestMqttPublisher(mqttConnection.EmulatorAddress, "test-publisher-main")
@@ -81,11 +90,7 @@ func TestMqttPipeline_Integration(t *testing.T) {
 
 	processedSub := psClient.Subscription(outputSubID)
 
-	// REFACTOR: Wait for the consumer to connect before publishing.
-	// This resolves the race condition caused by the consumer's asynchronous startup.
-	require.Eventually(t, func() bool {
-		return consumer.IsConnected()
-	}, 10*time.Second, 250*time.Millisecond, "MQTT consumer did not connect in time")
+	require.Eventually(t, consumer.IsConnected, 10*time.Second, 250*time.Millisecond, "MQTT consumer did not connect in time")
 
 	// --- 5. Publish Test Message and Verify ---
 	devicePayload := map[string]interface{}{"value": 42, "status": "ok"}
@@ -105,7 +110,7 @@ func TestMqttPipeline_Integration(t *testing.T) {
 	err = processedSub.Receive(pullCtx, func(ctxMsg context.Context, msg *pubsub.Message) {
 		msg.Ack()
 		receivedMsg = msg
-		pullCancel() // Stop receiving after the first message
+		pullCancel()
 	})
 
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -113,10 +118,13 @@ func TestMqttPipeline_Integration(t *testing.T) {
 	}
 	require.NotNil(t, receivedMsg, "Did not receive a message from Pub/Sub")
 
-	var result mqttconverter.RawMessage
+	// ** FIX **: Unmarshal into the correct struct to handle Base64 decoding.
+	var result messagepipeline.MessageData
 	err = json.Unmarshal(receivedMsg.Data, &result)
 	require.NoError(t, err)
 
-	assert.Equal(t, publishTopic, result.Topic)
+	// Assertions on the final message content
 	assert.JSONEq(t, string(msgBytes), string(result.Payload))
+	require.NotNil(t, result.EnrichmentData)
+	assert.Equal(t, publishTopic, result.EnrichmentData["mqttTopic"])
 }

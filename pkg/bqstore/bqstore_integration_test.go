@@ -15,7 +15,6 @@ import (
 
 	"github.com/illmade-knight/go-dataflow/pkg/bqstore"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
-	"github.com/illmade-knight/go-dataflow/pkg/types"
 	"github.com/illmade-knight/go-test/emulators"
 
 	"github.com/rs/zerolog"
@@ -35,8 +34,7 @@ type TestUpstreamMessage struct {
 }
 
 // ConsumedMessageTransformer implements the MessageTransformer logic for this test.
-// FIX: The transformer now accepts a context to match the updated interface.
-func ConsumedMessageTransformer(_ context.Context, msg types.ConsumedMessage) (*MonitorReadings, bool, error) {
+func ConsumedMessageTransformer(_ context.Context, msg messagepipeline.Message) (*MonitorReadings, bool, error) {
 	var upstreamMsg TestUpstreamMessage
 	if err := json.Unmarshal(msg.Payload, &upstreamMsg); err != nil {
 		return nil, false, fmt.Errorf("failed to unmarshal upstream message: %w", err)
@@ -72,13 +70,6 @@ func TestBigQueryService_Integration_FullFlow(t *testing.T) {
 	// --- Configuration and Client Setup ---
 	logger := zerolog.New(io.Discard)
 
-	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(testProjectID)
-	consumerCfg.ProjectID = testProjectID
-	consumerCfg.SubscriptionID = testInputSubscriptionID
-
-	batcherCfg := &bqstore.BatchInserterConfig{BatchSize: 5, FlushInterval: time.Second, InsertTimeout: 5 * time.Second}
-	bqInserterCfg := &bqstore.BigQueryDatasetConfig{ProjectID: testProjectID, DatasetID: testBigQueryDatasetID, TableID: testBigQueryTableID}
-
 	psClient, err := pubsub.NewClient(ctx, testProjectID, connection.ClientOptions...)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = psClient.Close() })
@@ -88,25 +79,33 @@ func TestBigQueryService_Integration_FullFlow(t *testing.T) {
 	t.Cleanup(func() { _ = bqClient.Close() })
 
 	// --- Initialize Pipeline Components ---
+	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(testProjectID)
+	consumerCfg.SubscriptionID = testInputSubscriptionID
 	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, psClient, logger)
 	require.NoError(t, err)
 
-	batchProcessor, err := bqstore.NewBigQueryBatchProcessor[MonitorReadings](ctx, bqClient, batcherCfg, bqInserterCfg, logger)
+	bqInserterCfg := &bqstore.BigQueryDatasetConfig{ProjectID: testProjectID, DatasetID: testBigQueryDatasetID, TableID: testBigQueryTableID}
+	bqInserter, err := bqstore.NewBigQueryInserter[MonitorReadings](ctx, bqClient, bqInserterCfg, logger)
 	require.NoError(t, err)
 
-	processingService, err := bqstore.NewBigQueryService[MonitorReadings](2, consumer, batchProcessor, ConsumedMessageTransformer, logger)
+	serviceCfg := messagepipeline.BatchingServiceConfig{
+		NumWorkers:    2,
+		BatchSize:     5,
+		FlushInterval: time.Second,
+	}
+
+	processingService, err := bqstore.NewBigQueryService[MonitorReadings](serviceCfg, consumer, bqInserter, ConsumedMessageTransformer, logger)
 	require.NoError(t, err)
 
 	// --- Start the Service ---
 	serviceCtx, serviceCancel := context.WithCancel(ctx)
 	t.Cleanup(serviceCancel)
-	go func() {
-		_ = processingService.Start(serviceCtx)
-	}()
+	err = processingService.Start(serviceCtx)
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stopCancel()
-		processingService.Stop(stopCtx)
+		_ = processingService.Stop(stopCtx)
 	})
 
 	// --- Publish Test Messages ---

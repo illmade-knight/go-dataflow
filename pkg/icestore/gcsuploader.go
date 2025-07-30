@@ -14,6 +14,12 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// DataUploader defines the interface for the final "sink" in the icestore pipeline.
+type DataUploader interface {
+	UploadBatch(ctx context.Context, items []*ArchivalData) error
+	Close() error
+}
+
 // GCSBatchUploaderConfig holds configuration specific to the GCS uploader.
 type GCSBatchUploaderConfig struct {
 	BucketName   string
@@ -142,8 +148,7 @@ func (u *GCSBatchUploader) uploadSingleGroup(ctx context.Context, batchKey strin
 	return nil
 }
 
-// Close waits for any pending upload goroutines to complete. Its blocking nature
-// is handled by the timeout context in the calling Batcher's Stop method.
+// Close waits for any pending upload goroutines to complete.
 func (u *GCSBatchUploader) Close() error {
 	u.logger.Info().Msg("Waiting for all pending GCS uploads to complete...")
 	u.wg.Wait()

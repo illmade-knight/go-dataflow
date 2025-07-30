@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/illmade-knight/go-dataflow/pkg/types"
+	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/rs/zerolog/log"
 )
 
@@ -18,7 +18,6 @@ type testPayload struct {
 }
 
 // MockDataBatchInserter is a mock implementation of bqstore.DataBatchInserter.
-// It allows for injecting custom logic to simulate success or failure.
 type MockDataBatchInserter[T any] struct {
 	mu            sync.Mutex
 	receivedItems [][]*T
@@ -34,7 +33,7 @@ func (m *MockDataBatchInserter[T]) InsertBatch(ctx context.Context, items []*T) 
 	if m.InsertBatchFn != nil {
 		return m.InsertBatchFn(ctx, items)
 	}
-	return nil // Default to success
+	return nil
 }
 
 func (m *MockDataBatchInserter[T]) Close() error { return nil }
@@ -50,24 +49,23 @@ func (m *MockDataBatchInserter[T]) GetCallCount() int {
 }
 
 // MockMessageConsumer is a mock of the messagepipeline.MessageConsumer interface.
-// REFACTOR: This has been updated to fully align with the refactored interface.
 type MockMessageConsumer struct {
-	msgChan  chan types.ConsumedMessage
+	msgChan  chan messagepipeline.Message
 	doneChan chan struct{}
 	stopOnce sync.Once
 }
 
 func NewMockMessageConsumer(bufferSize int) *MockMessageConsumer {
 	return &MockMessageConsumer{
-		msgChan:  make(chan types.ConsumedMessage, bufferSize),
+		msgChan:  make(chan messagepipeline.Message, bufferSize),
 		doneChan: make(chan struct{}),
 	}
 }
-func (m *MockMessageConsumer) Messages() <-chan types.ConsumedMessage { return m.msgChan }
+func (m *MockMessageConsumer) Messages() <-chan messagepipeline.Message { return m.msgChan }
 func (m *MockMessageConsumer) Start(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
-		_ = m.Stop(context.Background()) // Call Stop when the context is cancelled.
+		_ = m.Stop(context.Background())
 	}()
 	return nil
 }
@@ -79,7 +77,7 @@ func (m *MockMessageConsumer) Stop(ctx context.Context) error {
 	return nil
 }
 func (m *MockMessageConsumer) Done() <-chan struct{} { return m.doneChan }
-func (m *MockMessageConsumer) Push(msg types.ConsumedMessage) {
+func (m *MockMessageConsumer) Push(msg messagepipeline.Message) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Warn().Msg("Recovered from panic trying to push to closed consumer channel.")

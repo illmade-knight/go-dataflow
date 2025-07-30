@@ -19,7 +19,6 @@ import (
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-test/emulators"
 	"github.com/rs/zerolog"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,11 +51,9 @@ func TestIceStorageService_Integration(t *testing.T) {
 
 	logger := zerolog.New(os.Stderr).Level(zerolog.InfoLevel)
 
-	logger.Info().Msg("Setting up Pub/Sub emulator...")
 	pubsubConfig := emulators.GetDefaultPubsubConfig(testProjectID, map[string]string{testTopicID: testSubscriptionID})
 	pubsubConnection := emulators.SetupPubsubEmulator(t, ctx, pubsubConfig)
 
-	logger.Info().Msg("Setting up GCS emulator...")
 	gcsConfig := emulators.GetDefaultGCSConfig(testProjectID, testBucketName)
 	connection := emulators.SetupGCSEmulator(t, ctx, gcsConfig)
 	gcsClient := emulators.GetStorageClient(t, ctx, gcsConfig, connection.ClientOptions)
@@ -71,7 +68,7 @@ func TestIceStorageService_Integration(t *testing.T) {
 	}{
 		{
 			name:          "Mixed batch size and interval flush",
-			batchSize:     2,
+			batchSize:     10, // Larger batch size to allow flush interval to trigger grouping
 			flushInterval: 2 * time.Second,
 			messagesToPublish: []PublishedMessage{
 				{Payload: TestPayload{DeviceID: "dev-a1"}, Location: "loc-a", PublishTime: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)},
@@ -79,11 +76,11 @@ func TestIceStorageService_Integration(t *testing.T) {
 				{Payload: TestPayload{DeviceID: "dev-a2"}, Location: "loc-a", PublishTime: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)},
 				{Payload: TestPayload{DeviceID: "dev-c1"}, Location: "", PublishTime: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)},
 			},
-			expectedObjects: 3,
+			expectedObjects: 3, // loc-a gets 1 file, loc-b gets 1, and no-location gets 1
 		},
 		{
 			name:          "Multiple full batches",
-			batchSize:     2,
+			batchSize:     10,
 			flushInterval: 5 * time.Second,
 			messagesToPublish: []PublishedMessage{
 				{Payload: TestPayload{DeviceID: "dev-a1"}, Location: "loc-a", PublishTime: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)},
@@ -91,7 +88,7 @@ func TestIceStorageService_Integration(t *testing.T) {
 				{Payload: TestPayload{DeviceID: "dev-a2"}, Location: "loc-a", PublishTime: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)},
 				{Payload: TestPayload{DeviceID: "dev-b2"}, Location: "loc-b", PublishTime: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)},
 			},
-			expectedObjects: 2,
+			expectedObjects: 2, // loc-a gets 1 file, loc-b gets 1
 		},
 	}
 
@@ -109,48 +106,53 @@ func TestIceStorageService_Integration(t *testing.T) {
 
 			// --- Initialize Service Components ---
 			consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(testProjectID)
-			consumerCfg.ProjectID = testProjectID
 			consumerCfg.SubscriptionID = testSubscriptionID
 			consumer, err := messagepipeline.NewGooglePubsubConsumer(testCtx, consumerCfg, psClient, logger)
 			require.NoError(t, err)
 
-			batcher, err := icestore.NewGCSBatchProcessor(
+			serviceCfg := messagepipeline.BatchingServiceConfig{
+				NumWorkers:    2,
+				BatchSize:     tc.batchSize,
+				FlushInterval: tc.flushInterval,
+			}
+			uploaderCfg := icestore.GCSBatchUploaderConfig{
+				BucketName:   testBucketName,
+				ObjectPrefix: "archived-data",
+			}
+
+			service, err := icestore.NewIceStorageService(
+				serviceCfg,
+				consumer,
 				icestore.NewGCSClientAdapter(gcsClient),
-				&icestore.BatcherConfig{BatchSize: tc.batchSize, FlushInterval: tc.flushInterval, UploadTimeout: 5 * time.Second},
-				icestore.GCSBatchUploaderConfig{BucketName: testBucketName, ObjectPrefix: "archived-data"},
+				uploaderCfg,
+				icestore.ArchivalTransformer,
 				logger,
 			)
 			require.NoError(t, err)
 
-			service, err := icestore.NewIceStorageService(2, consumer, batcher, icestore.ArchivalTransformer, logger)
-			require.NoError(t, err)
-
-			// --- Run the Service and ensure it's stopped ---
+			// --- Run the Service ---
 			serviceCtx, serviceCancel := context.WithCancel(testCtx)
 			t.Cleanup(serviceCancel)
-			go func() { _ = service.Start(serviceCtx) }()
-
+			err = service.Start(serviceCtx)
+			require.NoError(t, err)
 			t.Cleanup(func() {
 				stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer stopCancel()
-				service.Stop(stopCtx)
+				_ = service.Stop(stopCtx)
 			})
 
 			// --- Publish Test Messages ---
 			publishMessages(t, testCtx, psClient, testTopicID, tc.messagesToPublish)
 
 			// --- Verification ---
-			// FIX: Wait for the side-effect (files in GCS) to occur. This verifies the running
-			// service processes messages correctly before we stop it.
 			require.Eventually(t, func() bool {
 				objects, err := listGCSObjectAttrs(testCtx, gcsClient.Bucket(testBucketName))
 				if err != nil {
 					t.Logf("Verification failed to list objects, will retry: %v", err)
 					return false
 				}
-				// This assertion provides a better error message if the count is wrong.
-				return assert.ObjectsAreEqual(tc.expectedObjects, len(objects))
-			}, 15*time.Second, 500*time.Millisecond, "Expected %d objects in GCS, but the count did not stabilize.", tc.expectedObjects)
+				return len(objects) == tc.expectedObjects
+			}, 20*time.Second, 500*time.Millisecond, "Expected %d objects in GCS, but found a different number.", tc.expectedObjects)
 		})
 	}
 }

@@ -1,7 +1,6 @@
 package bqstore
 
 import (
-	"cloud.google.com/go/bigquery"
 	"context"
 	"fmt"
 
@@ -10,52 +9,55 @@ import (
 )
 
 // NewBigQueryService is a high-level constructor that assembles and returns a
-// fully configured BigQuery processing pipeline service.
-// It wires together a message consumer, a batch inserter, and a message transformer.
+// fully configured BigQuery processing pipeline using the generic BatchingService.
 func NewBigQueryService[T any](
-	numWorkers int,
+	cfg messagepipeline.BatchingServiceConfig,
 	consumer messagepipeline.MessageConsumer,
-	batchProcessor messagepipeline.MessageProcessor[T],
+	bqInserter DataBatchInserter[T],
 	transformer messagepipeline.MessageTransformer[T],
 	logger zerolog.Logger,
-) (*messagepipeline.ProcessingService[T], error) {
+) (*messagepipeline.BatchingService[T], error) {
 
-	// The BatchInserter (which is a MessageProcessor) is passed directly to the
-	// generic service constructor.
-	genericService, err := messagepipeline.NewProcessingService[T](
-		numWorkers,
+	// 1. Define the BatchProcessor function. This is the final stage of the pipeline.
+	batchProcessor := func(ctx context.Context, batch []messagepipeline.ProcessableItem[T]) error {
+		if len(batch) == 0 {
+			return nil
+		}
+
+		// Extract the typed payloads from the processable items.
+		payloads := make([]*T, len(batch))
+		for i, item := range batch {
+			payloads[i] = item.Payload
+		}
+
+		// 2. Call the underlying data inserter.
+		if err := bqInserter.InsertBatch(ctx, payloads); err != nil {
+			logger.Error().Err(err).Int("batch_size", len(batch)).Msg("Failed to insert batch, Nacking all messages.")
+			for _, item := range batch {
+				item.Original.Nack()
+			}
+			return err // Propagate the error.
+		}
+
+		// 3. On success, Ack all original messages.
+		logger.Info().Int("batch_size", len(batch)).Msg("Successfully inserted batch, Acking all messages.")
+		for _, item := range batch {
+			item.Original.Ack()
+		}
+		return nil
+	}
+
+	// 4. Assemble the pipeline using the generic BatchingService.
+	genericService, err := messagepipeline.NewBatchingService[T](
+		cfg,
 		consumer,
-		batchProcessor,
 		transformer,
+		batchProcessor,
 		logger,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create generic processing service for bqstore: %w", err)
+		return nil, fmt.Errorf("failed to create generic batching service for bqstore: %w", err)
 	}
 
 	return genericService, nil
-}
-
-// NewBigQueryBatchProcessor is a convenience constructor that creates a complete
-// BigQuery batch processing component.
-// It satisfies the messagepipeline.MessageProcessor interface and can be passed
-// directly to NewBigQueryService.
-func NewBigQueryBatchProcessor[T any](
-	ctx context.Context,
-	client *bigquery.Client,
-	batchCfg *BatchInserterConfig,
-	dsCfg *BigQueryDatasetConfig,
-	logger zerolog.Logger,
-) (*BatchInserter[T], error) {
-	// 1. Create the underlying BigQuery-specific data inserter.
-	bigQueryInserter, err := NewBigQueryInserter[T](ctx, client, dsCfg, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create BigQuery inserter: %w", err)
-	}
-
-	// 2. Wrap the BigQuery inserter with the generic batching logic.
-	// REFACTOR: The call to NewBatcher no longer needs a context.
-	batchInserter := NewBatcher[T](batchCfg, bigQueryInserter, logger)
-
-	return batchInserter, nil
 }

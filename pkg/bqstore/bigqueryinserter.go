@@ -11,6 +11,13 @@ import (
 	"google.golang.org/api/option"
 )
 
+// DataBatchInserter is a generic interface for inserting a batch of items.
+// It abstracts the destination data store (e.g., BigQuery, Postgres, etc.).
+type DataBatchInserter[T any] interface {
+	InsertBatch(ctx context.Context, items []*T) error
+	Close() error
+}
+
 // BigQueryDatasetConfig holds configuration for a BigQuery dataset and table.
 type BigQueryDatasetConfig struct {
 	ProjectID       string
@@ -20,7 +27,6 @@ type BigQueryDatasetConfig struct {
 }
 
 // NewProductionBigQueryClient creates a BigQuery client suitable for production environments.
-// It will use Application Default Credentials unless a specific credentials file is provided.
 func NewProductionBigQueryClient(ctx context.Context, projectID string, credentialsFile string, logger zerolog.Logger) (*bigquery.Client, error) {
 	var opts []option.ClientOption
 	if credentialsFile != "" {
@@ -40,7 +46,6 @@ func NewProductionBigQueryClient(ctx context.Context, projectID string, credenti
 }
 
 // BigQueryInserter implements the DataBatchInserter interface for Google BigQuery.
-// It can insert batches of any struct type T that is compatible with BigQuery's schema inference.
 type BigQueryInserter[T any] struct {
 	client   *bigquery.Client
 	table    *bigquery.Table
@@ -48,9 +53,8 @@ type BigQueryInserter[T any] struct {
 	logger   zerolog.Logger
 }
 
-// NewBigQueryInserter creates a new generic inserter for a specified type T.
-// If the target table does not exist, it attempts to create it by inferring the schema
-// from the zero value of type T.
+// NewBigQueryInserter creates a new inserter for a specified type T.
+// If the target table does not exist, it attempts to create it by inferring the schema.
 func NewBigQueryInserter[T any](
 	ctx context.Context,
 	client *bigquery.Client,
@@ -72,14 +76,11 @@ func NewBigQueryInserter[T any](
 	if err != nil {
 		if strings.Contains(err.Error(), "notFound") {
 			logger.Warn().Msg("BigQuery table not found. Attempting to create with inferred schema.")
-
 			var zero T
 			inferredSchema, inferErr := bigquery.InferSchema(zero)
 			if inferErr != nil {
 				return nil, fmt.Errorf("failed to infer schema for type %T: %w", zero, inferErr)
 			}
-			logger.Info().Int("inferred_field_count", len(inferredSchema)).Msg("Successfully inferred schema from type.")
-
 			tableMetadata := &bigquery.TableMetadata{Schema: inferredSchema}
 			if createErr := tableRef.Create(ctx, tableMetadata); createErr != nil {
 				return nil, fmt.Errorf("failed to create BigQuery table %s.%s: %w", cfg.DatasetID, cfg.TableID, createErr)
@@ -107,11 +108,9 @@ func (i *BigQueryInserter[T]) InsertBatch(ctx context.Context, items []*T) error
 		return nil
 	}
 
-	// The BigQuery client's Put method natively handles a slice of struct pointers.
 	err := i.inserter.Put(ctx, items)
 	if err != nil {
 		i.logger.Error().Err(err).Int("batch_size", len(items)).Msg("Failed to insert rows into BigQuery.")
-		// Log detailed row-level errors if available for easier debugging.
 		if multiErr, ok := err.(bigquery.PutMultiError); ok {
 			for _, rowErr := range multiErr {
 				i.logger.Error().
@@ -126,8 +125,7 @@ func (i *BigQueryInserter[T]) InsertBatch(ctx context.Context, items []*T) error
 	return nil
 }
 
-// Close is a no-op for this implementation. The BigQuery client's lifecycle is managed
-// externally, allowing a single client to be shared across multiple inserters if needed.
+// Close is a no-op for this implementation.
 func (i *BigQueryInserter[T]) Close() error {
 	i.logger.Info().Msg("BigQueryInserter.Close() called; client lifecycle is managed externally.")
 	return nil

@@ -2,17 +2,16 @@ package messagepipeline_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"cloud.google.com/go/pubsub"
 	"cloud.google.com/go/pubsub/pstest"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
-	"github.com/illmade-knight/go-dataflow/pkg/types"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
@@ -23,7 +22,7 @@ import (
 )
 
 // =============================================================================
-//  Test Helpers
+//  Test Helpers for Producer
 // =============================================================================
 
 func sanitizedTestName(t *testing.T) string {
@@ -37,17 +36,18 @@ func sanitizedTestName(t *testing.T) string {
 	return sanitized
 }
 
-func setupTestPubsub(t *testing.T, projectID string, topicID string) (*pubsub.Client, *pubsub.Topic) {
+// setupTestPubsub creates a mock Pub/Sub server, client, topic, and subscription for testing.
+func setupTestPubsub(t *testing.T, projectID, topicID, subID string) (*pubsub.Client, *pubsub.Topic, *pubsub.Subscription) {
 	t.Helper()
 	ctx := context.Background()
 	srv := pstest.NewServer()
 	t.Cleanup(func() { _ = srv.Close() })
 
-	opts := []option.ClientOption{
-		option.WithEndpoint(srv.Addr),
-		option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
-		option.WithoutAuthentication(),
-	}
+	conn, err := grpc.Dial(srv.Addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	opts := []option.ClientOption{option.WithGRPCConn(conn)}
 
 	client, err := pubsub.NewClient(ctx, projectID, opts...)
 	require.NoError(t, err)
@@ -55,134 +55,88 @@ func setupTestPubsub(t *testing.T, projectID string, topicID string) (*pubsub.Cl
 
 	topic, err := client.CreateTopic(ctx, topicID)
 	require.NoError(t, err)
-	// REFACTOR: Use t.Cleanup for topic deletion. The producer's Stop now handles stopping the topic.
-	t.Cleanup(func() {
-		deleteCtx, deleteCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer deleteCancel() // Defer is acceptable for a one-liner inside a cleanup func.
-		if err := topic.Delete(deleteCtx); err != nil {
-			log.Warn().Err(err).Str("topic_id", topic.ID()).Msg("Error deleting test topic during cleanup.")
-		}
-	})
 
-	return client, topic
-}
+	sub, err := client.CreateSubscription(ctx, subID, pubsub.SubscriptionConfig{Topic: topic})
+	require.NoError(t, err)
 
-type TestPayload struct {
-	Value string `json:"value"`
-	Index int    `json:"index"`
+	return client, topic, sub
 }
 
 // =============================================================================
 //  Test Cases for GooglePubsubProducer
 // =============================================================================
 
-// TestGooglePubsubProducer_Lifecycle_And_MessageProduction has been optimized for speed.
-// It removes unconditional time.Sleep calls and uses robust, timed waits.
-func TestGooglePubsubProducer_Lifecycle_And_MessageProduction(t *testing.T) {
-	ctx := context.Background()
+func TestGooglePubsubProducer_Publish(t *testing.T) {
+	// --- Arrange ---
+	testCtx, testCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(testCancel)
 
-	projectID := "test_project_id"
+	// Create unique names for this test run to allow parallel execution.
+	uniqueSuffix := fmt.Sprintf("%s-%d", sanitizedTestName(t), time.Now().UnixNano())
+	projectID := "proj-" + uniqueSuffix
+	topicID := "topic-" + uniqueSuffix
+	subID := "sub-" + uniqueSuffix
 
-	testCases := []struct {
-		name           string
-		messagesToSend int
-		batchSize      int
-		batchDelay     time.Duration
-		isTimeBound    bool // Flag to identify the time-based batching test.
-	}{
-		{"Single message flushed by Stop", 1, 10, 1 * time.Second, false},
-		{"Batch size reached", 5, 5, 1 * time.Second, false},
-		{"Batch delay reached", 4, 10, 150 * time.Millisecond, true}, // REFACTOR: Specific short delay for this test.
-		{"Multiple batches by size", 10, 3, 1 * time.Second, false},
-		{"No messages sent", 0, 10, 100 * time.Millisecond, false},
+	pubsubClient, _, subscription := setupTestPubsub(t, projectID, topicID, subID)
+
+	producerConfig := messagepipeline.NewGooglePubsubProducerDefaults(projectID, topicID)
+
+	producer, err := messagepipeline.NewGooglePubsubProducer(testCtx, producerConfig, pubsubClient, zerolog.Nop())
+	require.NoError(t, err)
+	t.Cleanup(producer.Stop) // Ensure producer is stopped cleanly.
+
+	// --- Act ---
+	// Create the message data to be published.
+	msgToPublish := messagepipeline.MessageData{
+		ID:          "test-id-123",
+		Payload:     []byte("hello producer"),
+		PublishTime: time.Now().UTC().Truncate(time.Second),
+		EnrichmentData: map[string]interface{}{
+			"source": "test",
+		},
 	}
 
-	for _, tc := range testCases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	// Publish the message. We use a separate context for the publish call itself.
+	publishCtx, publishCancel := context.WithTimeout(testCtx, 5*time.Second)
+	t.Cleanup(publishCancel)
 
-			uniqueSuffix := fmt.Sprintf("%s-%d", sanitizedTestName(t), time.Now().UnixNano())
-			currentProjectID := fmt.Sprintf("proj-%s", uniqueSuffix)
-			dynamicTopicID := fmt.Sprintf("topic-%s", uniqueSuffix)
-			pubsubClient, outputTopic := setupTestPubsub(t, currentProjectID, dynamicTopicID)
+	publishedID, err := producer.Publish(publishCtx, msgToPublish)
+	require.NoError(t, err)
+	require.NotEmpty(t, publishedID)
 
-			producerConfig := messagepipeline.NewGooglePubsubProducerDefaults(projectID)
-			producerConfig.TopicID = outputTopic.ID()
-			producerConfig.BatchSize = tc.batchSize
-			producerConfig.BatchDelay = tc.batchDelay
-			producerConfig.AutoAckOnPublish = true // Enable auto-Ack/Nack for test verification.
+	// --- Assert ---
+	// Receive the message from the subscription to verify it was published correctly.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var receivedMsg *pubsub.Message
 
-			producerCtx, producerCancel := context.WithCancel(context.Background())
-			t.Cleanup(producerCancel)
+	// Use a cancellable context for the receiver.
+	receiveCtx, receiveCancel := context.WithCancel(testCtx)
+	t.Cleanup(receiveCancel)
 
-			producer, err := messagepipeline.NewGooglePubsubProducer[TestPayload](
-				ctx, producerConfig, pubsubClient, zerolog.Nop(),
-			)
-			require.NoError(t, err)
-			producer.Start(producerCtx)
-
-			var wgSend sync.WaitGroup
-			var ackCount int32
-
-			for i := 0; i < tc.messagesToSend; i++ {
-				msgID := fmt.Sprintf("msg-%s-%d", uniqueSuffix, i)
-				wgSend.Add(1)
-				originalMsg := types.ConsumedMessage{
-					PublishMessage: types.PublishMessage{ID: msgID},
-					Ack: func() {
-						atomic.AddInt32(&ackCount, 1)
-						wgSend.Done()
-					},
-					Nack: func() {
-						t.Errorf("PRODUCER TEST (%s): Message %s was unexpectedly Nacked", tc.name, msgID)
-						wgSend.Done()
-					},
-				}
-				producer.Input() <- &types.BatchedMessage[TestPayload]{
-					OriginalMessage: originalMsg,
-					Payload:         &TestPayload{Value: fmt.Sprintf("v-%d", i), Index: i},
-				}
-			}
-
-			// REFACTOR: The unconditional sleep is removed. We only sleep if we are specifically
-			// testing the time-based batch flush. This significantly speeds up other test cases.
-			if tc.isTimeBound {
-				time.Sleep(tc.batchDelay * 2) // Wait just long enough for the time-based batch to fire.
-			}
-
-			// For cases that are NOT flushed by time, producer.Stop() will handle the flush.
-			if !tc.isTimeBound {
-				stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				t.Cleanup(stopCancel)
-				err := producer.Stop(stopCtx)
-				require.NoError(t, err)
-			}
-
-			// Wait for all original message ACKs to be called, with a timeout to prevent hangs.
-			waitChan := make(chan struct{})
-			go func() {
-				wgSend.Wait()
-				close(waitChan)
-			}()
-
-			select {
-			case <-waitChan:
-				// Success: all messages were acknowledged.
-			case <-time.After(5 * time.Second): // A reasonable timeout for all acks to return.
-				t.Fatalf("PRODUCER TEST (%s): Timeout waiting for all messages to be acknowledged. Got %d, want %d",
-					tc.name, atomic.LoadInt32(&ackCount), tc.messagesToSend)
-			}
-
-			// If the test was time-bound, the batch should be flushed and we can now stop the producer.
-			if tc.isTimeBound {
-				stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				t.Cleanup(stopCancel)
-				err := producer.Stop(stopCtx)
-				require.NoError(t, err)
-			}
-
-			assert.Equal(t, int32(tc.messagesToSend), atomic.LoadInt32(&ackCount), "Final ack count mismatch")
+	go func() {
+		defer wg.Done()
+		err := subscription.Receive(receiveCtx, func(ctx context.Context, msg *pubsub.Message) {
+			receivedMsg = msg
+			msg.Ack()
+			receiveCancel() // Stop receiving after the first message.
 		})
-	}
+		if err != nil && err != context.Canceled {
+			log.Error().Err(err).Msg("Receive error")
+		}
+	}()
+
+	wg.Wait() // Wait for the receiver to finish.
+
+	require.NotNil(t, receivedMsg, "Did not receive message from subscription")
+
+	// Unmarshal the received data and compare it to the original.
+	var receivedData messagepipeline.MessageData
+	err = json.Unmarshal(receivedMsg.Data, &receivedData)
+	require.NoError(t, err)
+
+	assert.Equal(t, msgToPublish.ID, receivedData.ID)
+	assert.Equal(t, msgToPublish.Payload, receivedData.Payload)
+	assert.WithinDuration(t, msgToPublish.PublishTime, receivedData.PublishTime, time.Second)
+	assert.Equal(t, msgToPublish.EnrichmentData["source"], receivedData.EnrichmentData["source"])
 }

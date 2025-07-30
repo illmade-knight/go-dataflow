@@ -9,7 +9,6 @@ import (
 
 	"cloud.google.com/go/pubsub"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
-	"github.com/illmade-knight/go-dataflow/pkg/types"
 	"github.com/illmade-knight/go-test/emulators"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -17,41 +16,46 @@ import (
 )
 
 func TestGooglePubsubConsumer_Lifecycle_And_MessageReception(t *testing.T) {
+	// --- Arrange ---
 	projectID := "test-consumer-lifecycle"
 	topicID := "test-consumer-topic"
 	subID := "test-consumer-sub"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 
+	// Setup Pub/Sub emulator
 	pubsubEmulatorCfg := emulators.GetDefaultPubsubConfig(projectID, map[string]string{
 		topicID: subID,
 	})
 	emulatorConn := emulators.SetupPubsubEmulator(t, ctx, pubsubEmulatorCfg)
 	clientOptions := emulatorConn.ClientOptions
 
-	// Use the defaults which now include the new timeout field.
+	// Configure the consumer
 	cfg := messagepipeline.NewGooglePubsubConsumerDefaults(projectID)
-	cfg.ProjectID = projectID
 	cfg.SubscriptionID = subID
 	cfg.MaxOutstandingMessages = 1
 	cfg.NumGoroutines = 1
 
 	client, err := pubsub.NewClient(ctx, projectID, clientOptions...)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
 
+	// Create the consumer instance
 	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, cfg, client, zerolog.Nop())
 	require.NoError(t, err)
 	require.NotNil(t, consumer)
 
+	// --- Act: Start and Publish ---
 	consumerCtx, consumerCancel := context.WithCancel(context.Background())
-	defer consumerCancel()
+	t.Cleanup(consumerCancel)
 
 	err = consumer.Start(consumerCtx)
 	require.NoError(t, err)
 
+	// Publish a test message
 	topic := client.Topic(topicID)
-	defer topic.Stop()
+	t.Cleanup(func() { topic.Stop() }) // Ensure topic is stopped cleanly.
 
 	msgPayload := []byte("hello world")
 	msgAttributes := map[string]string{
@@ -66,9 +70,11 @@ func TestGooglePubsubConsumer_Lifecycle_And_MessageReception(t *testing.T) {
 	_, err = result.Get(context.Background())
 	require.NoError(t, err)
 
-	var receivedMsg types.ConsumedMessage
+	// --- Assert: Receive and Verify Message ---
+	var receivedMsg messagepipeline.Message
 	select {
 	case receivedMsg = <-consumer.Messages():
+		// Message received, proceed to assertions
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for message")
 	}
@@ -80,8 +86,10 @@ func TestGooglePubsubConsumer_Lifecycle_And_MessageReception(t *testing.T) {
 	assert.NotContains(t, receivedMsg.Attributes, "EnrichmentData", "Consumer should not populate EnrichmentData")
 	receivedMsg.Ack()
 
-	// Pass the parent context to Stop, which has a 30s timeout.
-	err = consumer.Stop(ctx)
+	// --- Act: Stop and Verify Shutdown ---
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(stopCancel)
+	err = consumer.Stop(stopCtx)
 	require.NoError(t, err)
 
 	// Verify that the Done channel is closed, confirming a graceful shutdown.

@@ -1,4 +1,3 @@
-// mqttconverter/mqttconsumer_test.go
 package mqttconverter_test
 
 import (
@@ -27,18 +26,16 @@ func (m *mockMqttMessage) Qos() byte         { return 1 }
 func (m *mockMqttMessage) Retained() bool    { return false }
 func (m *mockMqttMessage) Ack()              {}
 
-// TestMqttConsumer_MessageHandler verifies the core logic of the consumer:
-// that it correctly transforms a Paho message into a standard ConsumedMessage.
+// TestMqttConsumer_MessageHandler verifies that the consumer correctly transforms
+// a Paho message into a standard messagepipeline.Message.
 func TestMqttConsumer_MessageHandler(t *testing.T) {
 	// Arrange
 	cfg := &mqttconverter.MQTTClientConfig{BrokerURL: "tcp://localhost:1883", Topic: "test/topic"}
 	consumer, err := mqttconverter.NewMqttConsumer(cfg, zerolog.Nop())
 	require.NoError(t, err)
 
-	// Get the handler function directly from the consumer.
 	handler := consumer.GetMessageHandlerForTest(context.Background())
 
-	// Create a mock Paho message.
 	expectedPayload := []byte("hello world")
 	pahoMsg := &mockMqttMessage{
 		topic:     "devices/test-123/data",
@@ -47,7 +44,7 @@ func TestMqttConsumer_MessageHandler(t *testing.T) {
 	}
 
 	// Act: Call the handler directly with the mock message.
-	handler(nil, pahoMsg) // The client argument is not used in the handler, so nil is fine.
+	handler(nil, pahoMsg) // The client argument is not used in our handler.
 
 	// Assert: Check that a correctly formatted message appears on the output channel.
 	select {
