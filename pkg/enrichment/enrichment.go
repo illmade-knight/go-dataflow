@@ -10,6 +10,11 @@ import (
 
 // --- Generic Enrichment Components ---
 
+// MessageEnricher defines a function that **enriches** a `Message` in-place by
+// modifying its fields (e.g., EnrichmentData). It does not return a new payload.
+// This is used by the specialized, non-generic EnrichmentService.
+type MessageEnricher func(ctx context.Context, msg *messagepipeline.Message) (skip bool, err error)
+
 // KeyExtractor defines a function to get an enrichment key from a message.
 type KeyExtractor[K comparable] func(msg *messagepipeline.Message) (K, bool)
 
@@ -23,7 +28,7 @@ func NewEnricherFunc[K comparable, V any](
 	keyEx KeyExtractor[K],
 	applier Applier[V],
 	logger zerolog.Logger,
-) (messagepipeline.MessageEnricher, error) {
+) (MessageEnricher, error) {
 	if fetcher == nil || keyEx == nil || applier == nil {
 		return nil, fmt.Errorf("fetcher, keyExtractor, and applier cannot be nil")
 	}

@@ -1,4 +1,4 @@
-package messagepipeline_test
+package enrichment_test
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 
 func TestEnrichmentService(t *testing.T) {
 	t.Run("Success Path", func(t *testing.T) {
-		consumer := NewMockMessageConsumer(10)
+		consumer := messagepipeline.NewMockMessageConsumer(10)
 		var enricherCalled, processorCalled int32
 
 		enricher := func(ctx context.Context, msg *messagepipeline.Message) (bool, error) {
@@ -29,8 +29,8 @@ func TestEnrichmentService(t *testing.T) {
 			return nil
 		}
 
-		cfg := messagepipeline.EnrichmentServiceConfig{NumWorkers: 1}
-		service, err := messagepipeline.NewEnrichmentService(cfg, consumer, enricher, processor, zerolog.Nop())
+		cfg := EnrichmentServiceConfig{NumWorkers: 1}
+		service, err := NewEnrichmentService(cfg, consumer, enricher, processor, zerolog.Nop())
 		require.NoError(t, err)
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -48,7 +48,7 @@ func TestEnrichmentService(t *testing.T) {
 	})
 
 	t.Run("Enricher Skip", func(t *testing.T) {
-		consumer := NewMockMessageConsumer(10)
+		consumer := messagepipeline.NewMockMessageConsumer(10)
 		processor := func(ctx context.Context, msg *messagepipeline.Message) error {
 			t.Error("processor should not be called")
 			return nil
@@ -57,7 +57,7 @@ func TestEnrichmentService(t *testing.T) {
 			return true, nil // Skip
 		}
 
-		service, _ := messagepipeline.NewEnrichmentService(messagepipeline.EnrichmentServiceConfig{NumWorkers: 1}, consumer, enricher, processor, zerolog.Nop())
+		service, _ := NewEnrichmentService(EnrichmentServiceConfig{NumWorkers: 1}, consumer, enricher, processor, zerolog.Nop())
 		_ = service.Start(context.Background())
 
 		var acked int32
@@ -69,11 +69,11 @@ func TestEnrichmentService(t *testing.T) {
 	})
 
 	t.Run("Processor Error", func(t *testing.T) {
-		consumer := NewMockMessageConsumer(10)
+		consumer := messagepipeline.NewMockMessageConsumer(10)
 		enricher := func(ctx context.Context, msg *messagepipeline.Message) (bool, error) { return false, nil }
 		processor := func(ctx context.Context, msg *messagepipeline.Message) error { return errors.New("processor failed") }
 
-		service, _ := messagepipeline.NewEnrichmentService(messagepipeline.EnrichmentServiceConfig{NumWorkers: 1}, consumer, enricher, processor, zerolog.Nop())
+		service, _ := NewEnrichmentService(EnrichmentServiceConfig{NumWorkers: 1}, consumer, enricher, processor, zerolog.Nop())
 		_ = service.Start(context.Background())
 
 		var nacked int32

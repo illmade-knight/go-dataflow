@@ -1,8 +1,9 @@
-package messagepipeline
+package enrichment
 
 import (
 	"context"
 	"fmt"
+	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"sync"
 
 	"github.com/rs/zerolog"
@@ -17,9 +18,9 @@ type EnrichmentServiceConfig struct {
 // in-place, and sends them to a final processor function.
 type EnrichmentService struct {
 	cfg       EnrichmentServiceConfig
-	consumer  MessageConsumer
 	enricher  MessageEnricher
-	processor MessageProcessor
+	consumer  messagepipeline.MessageConsumer
+	processor messagepipeline.MessageProcessor
 	logger    zerolog.Logger
 	wg        sync.WaitGroup
 }
@@ -27,9 +28,9 @@ type EnrichmentService struct {
 // NewEnrichmentService creates a new EnrichmentService.
 func NewEnrichmentService(
 	cfg EnrichmentServiceConfig,
-	consumer MessageConsumer,
 	enricher MessageEnricher,
-	processor MessageProcessor,
+	consumer messagepipeline.MessageConsumer,
+	processor messagepipeline.MessageProcessor,
 	logger zerolog.Logger,
 ) (*EnrichmentService, error) {
 	if cfg.NumWorkers <= 0 {
@@ -110,7 +111,7 @@ func (s *EnrichmentService) worker(ctx context.Context, workerID int) {
 }
 
 // processConsumedMessage contains the core logic for a single message.
-func (s *EnrichmentService) processConsumedMessage(ctx context.Context, msg *Message, workerID int) {
+func (s *EnrichmentService) processConsumedMessage(ctx context.Context, msg *messagepipeline.Message, workerID int) {
 	skip, err := s.enricher(ctx, msg)
 	if err != nil {
 		s.logger.Error().Err(err).Str("msg_id", msg.ID).Msg("Enricher failed, Nacking.")

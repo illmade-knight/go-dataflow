@@ -27,11 +27,6 @@ type MessageConsumer interface {
 // StreamingService and BatchingService.
 type MessageTransformer[T any] func(ctx context.Context, msg *Message) (payload *T, skip bool, err error)
 
-// MessageEnricher defines a function that **enriches** a `Message` in-place by
-// modifying its fields (e.g., EnrichmentData). It does not return a new payload.
-// This is used by the specialized, non-generic EnrichmentService.
-type MessageEnricher func(ctx context.Context, msg *Message) (skip bool, err error)
-
 // --- Stage 3: Processor ---
 
 // ProcessableItem links a transformed payload with its original message for Ack/Nack.
