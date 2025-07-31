@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog"
@@ -15,7 +16,7 @@ import (
 // BaseConfig holds common configuration fields for all services.
 type BaseConfig struct {
 	LogLevel        string `yaml:"log_level"`
-	HTTPPort        string `yaml:"http_port"`
+	HTTPPort        string `yaml:"http_port"` // e.g., "8080". The PORT env var will override this.
 	ProjectID       string `yaml:"project_id"`
 	CredentialsFile string `yaml:"credentials_file"`
 
@@ -35,7 +36,7 @@ type Service interface {
 // BaseServer provides common functionalities for microservice servers.
 type BaseServer struct {
 	Logger     zerolog.Logger
-	HTTPPort   string
+	HTTPPort   string // The listen address, e.g., ":8080"
 	httpServer *http.Server
 	mux        *http.ServeMux
 	actualAddr string
@@ -43,16 +44,29 @@ type BaseServer struct {
 }
 
 // NewBaseServer creates and initializes a new BaseServer.
+// It normalizes the provided httpPort to ensure it's a valid listen address.
 func NewBaseServer(logger zerolog.Logger, httpPort string) *BaseServer {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", HealthzHandler)
 
+	// REFACTOR: Normalize the port to handle different configuration styles
+	// and support environment variables like PORT from Cloud Run.
+	listenAddr := httpPort
+	if listenAddr == "" {
+		// Default to 8080 if nothing is provided.
+		listenAddr = "8080"
+	}
+	if !strings.HasPrefix(listenAddr, ":") {
+		// Prepend colon if the port is just a number (e.g., "8081").
+		listenAddr = ":" + listenAddr
+	}
+
 	return &BaseServer{
 		Logger:   logger,
-		HTTPPort: httpPort,
+		HTTPPort: listenAddr, // Store the normalized address.
 		mux:      mux,
 		httpServer: &http.Server{
-			Addr:    httpPort,
+			Addr:    listenAddr,
 			Handler: mux,
 		},
 	}
@@ -60,6 +74,7 @@ func NewBaseServer(logger zerolog.Logger, httpPort string) *BaseServer {
 
 // Start initiates the HTTP server in a background goroutine.
 func (s *BaseServer) Start() error {
+	// s.HTTPPort is now guaranteed to be in the correct format (e.g., ":8080").
 	listener, err := net.Listen("tcp", s.HTTPPort)
 	if err != nil {
 		return fmt.Errorf("failed to listen on port %s: %w", s.HTTPPort, err)
@@ -81,7 +96,6 @@ func (s *BaseServer) Start() error {
 }
 
 // Shutdown gracefully stops the HTTP server, respecting the provided context's deadline.
-// REFACTOR: The Shutdown method now accepts a context.
 func (s *BaseServer) Shutdown(ctx context.Context) error {
 	s.Logger.Info().Msg("Shutting down HTTP server...")
 	if err := s.httpServer.Shutdown(ctx); err != nil {
@@ -92,18 +106,20 @@ func (s *BaseServer) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// GetHTTPPort returns the actual configured HTTP port the server is listening on.
+// GetHTTPPort returns the actual network port the server is listening on.
+// This is useful when port "0" is used to request a random free port.
 func (s *BaseServer) GetHTTPPort() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	_, port, err := net.SplitHostPort(s.actualAddr)
 	if err != nil {
+		// Fallback to the configured address if split fails.
 		return s.HTTPPort
 	}
 	return ":" + port
 }
 
-// Mux returns the underlying ServeMux.
+// Mux returns the underlying ServeMux for registering additional handlers.
 func (s *BaseServer) Mux() *http.ServeMux {
 	return s.mux
 }
