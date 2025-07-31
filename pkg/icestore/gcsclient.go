@@ -15,22 +15,22 @@ import (
 
 // --- GCS Client Abstraction Interfaces ---
 
-// GCSClient abstracts the top-level GCS client.
+// GCSClient abstracts the top-level *storage.Client.
 type GCSClient interface {
 	Bucket(name string) GCSBucketHandle
 }
 
-// GCSBucketHandle abstracts a GCS bucket.
+// GCSBucketHandle abstracts a *storage.BucketHandle.
 type GCSBucketHandle interface {
 	Object(name string) GCSObjectHandle
 }
 
-// GCSObjectHandle abstracts a GCS object.
+// GCSObjectHandle abstracts a *storage.ObjectHandle.
 type GCSObjectHandle interface {
 	NewWriter(ctx context.Context) GCSWriter
 }
 
-// GCSWriter abstracts a GCS object writer. It must satisfy the io.WriteCloser interface.
+// GCSWriter abstracts a *storage.Writer. It must satisfy the io.WriteCloser interface.
 type GCSWriter interface {
 	io.WriteCloser
 }
@@ -51,24 +51,27 @@ func NewGCSClientAdapter(client *storage.Client) GCSClient {
 	return &gcsClientAdapter{client: client}
 }
 
+// Bucket returns an adapter for the underlying bucket handle.
 func (a *gcsClientAdapter) Bucket(name string) GCSBucketHandle {
 	return &gcsBucketHandleAdapter{handle: a.client.Bucket(name)}
 }
 
-// gcsBucketHandleAdapter wraps a *storage.BucketHandle.
+// gcsBucketHandleAdapter wraps a *storage.BucketHandle to satisfy GCSBucketHandle.
 type gcsBucketHandleAdapter struct {
 	handle *storage.BucketHandle
 }
 
+// Object returns an adapter for the underlying object handle.
 func (a *gcsBucketHandleAdapter) Object(name string) GCSObjectHandle {
 	return &gcsObjectHandleAdapter{handle: a.handle.Object(name)}
 }
 
-// gcsObjectHandleAdapter wraps a *storage.ObjectHandle.
+// gcsObjectHandleAdapter wraps a *storage.ObjectHandle to satisfy GCSObjectHandle.
 type gcsObjectHandleAdapter struct {
 	handle *storage.ObjectHandle
 }
 
+// NewWriter returns the underlying *storage.Writer, which already satisfies the GCSWriter interface.
 func (a *gcsObjectHandleAdapter) NewWriter(ctx context.Context) GCSWriter {
 	// The concrete *storage.Writer returned by the real client already implements
 	// io.WriteCloser, so it automatically satisfies our GCSWriter interface.

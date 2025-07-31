@@ -110,7 +110,7 @@ func TestIceStorageService_Integration(t *testing.T) {
 			consumer, err := messagepipeline.NewGooglePubsubConsumer(testCtx, consumerCfg, psClient, logger)
 			require.NoError(t, err)
 
-			serviceCfg := messagepipeline.BatchingServiceConfig{
+			serviceCfg := icestore.IceStorageServiceConfig{
 				NumWorkers:    2,
 				BatchSize:     tc.batchSize,
 				FlushInterval: tc.flushInterval,

@@ -8,12 +8,19 @@ import (
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 )
 
-// ArchivalData represents the final structured data written to a GCS object.
+// ArchivalData represents the final structured data that is serialized and
+// written as a line in a GCS object.
 type ArchivalData struct {
-	ID                    string    `json:"id"`
-	BatchKey              string    `json:"batchKey"`
-	OriginalPubSubPayload []byte    `json:"originalPubSubPayload"`
-	ArchivedAt            time.Time `json:"archivedAt"`
+	// ID is the unique identifier from the original message broker.
+	ID string `json:"id"`
+	// BatchKey is the application-specific key used to group messages into the
+	// same GCS object. For example, "2025/06/15/location-a".
+	BatchKey string `json:"batchKey"`
+	// OriginalPubSubPayload contains the raw, unmodified payload from the
+	// original message, preserved for archival purposes.
+	OriginalPubSubPayload []byte `json:"originalPubSubPayload"`
+	// ArchivedAt is the timestamp of when the message was processed by this service.
+	ArchivedAt time.Time `json:"archivedAt"`
 }
 
 // GetBatchKey returns the key used for grouping data in GCS.
@@ -22,7 +29,12 @@ func (d *ArchivalData) GetBatchKey() string {
 }
 
 // ArchivalTransformer is a MessageTransformer function that converts a generic
-// Message into the icestore-specific ArchivalData format.
+// messagepipeline.Message into the icestore-specific ArchivalData format.
+//
+// It constructs a BatchKey based on the message's timestamp and an optional
+// "location" field found in the message's attributes or enrichment data. This
+// allows the pipeline to automatically partition archived data into date- and
+// location-based folders in GCS.
 func ArchivalTransformer(_ context.Context, msg *messagepipeline.Message) (*ArchivalData, bool, error) {
 	var ts time.Time
 

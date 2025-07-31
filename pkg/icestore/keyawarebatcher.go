@@ -9,17 +9,23 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// flushFunc is the function that the KeyAwareBatcher will call when a batch is ready.
+// flushFunc is the function that the KeyAwareBatcher will call with a batch of
+// items that all share the same batch key.
 type flushFunc func(ctx context.Context, batch []messagepipeline.ProcessableItem[ArchivalData])
 
 // KeyAwareBatcherConfig holds configuration for the KeyAwareBatcher.
 type KeyAwareBatcherConfig struct {
-	BatchSize     int
+	// BatchSize is the number of items for a single key to accumulate before flushing.
+	BatchSize int
+	// FlushInterval is the maximum amount of time a batch can be held before being flushed,
+	// regardless of its size.
 	FlushInterval time.Duration
 }
 
-// KeyAwareBatcher is a stateful component that groups messages by their batch
-// key and flushes them when a batch is full or a timer expires.
+// KeyAwareBatcher is a stateful component that receives individual items, groups
+// them in-memory into batches based on their `BatchKey`, and flushes these batches
+// to a provided flush function. A flush is triggered for a specific key when its
+// batch reaches `BatchSize`, or for all pending batches when `FlushInterval` expires.
 type KeyAwareBatcher struct {
 	cfg       KeyAwareBatcherConfig
 	logger    zerolog.Logger
@@ -47,12 +53,13 @@ func (b *KeyAwareBatcher) Start(ctx context.Context) {
 	go b.worker(ctx)
 }
 
-// Add submits a new item to be batched.
+// Add submits a new item to be batched. This method is safe for concurrent use.
 func (b *KeyAwareBatcher) Add(item messagepipeline.ProcessableItem[ArchivalData]) {
 	b.inputChan <- item
 }
 
-// Stop gracefully shuts down the batcher, flushing any pending items.
+// Stop gracefully shuts down the batcher. It closes the input channel and waits
+// for the worker to process and flush all pending items.
 func (b *KeyAwareBatcher) Stop() {
 	close(b.inputChan)
 	b.wg.Wait()

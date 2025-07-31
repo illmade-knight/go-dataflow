@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/illmade-knight/go-dataflow/pkg/icestore"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
@@ -98,7 +99,15 @@ func newMockMessageConsumer(bufferSize int) *mockMessageConsumer {
 	return &mockMessageConsumer{msgChan: make(chan messagepipeline.Message, bufferSize)}
 }
 func (m *mockMessageConsumer) Messages() <-chan messagepipeline.Message { return m.msgChan }
-func (m *mockMessageConsumer) Start(ctx context.Context) error          { return nil }
+func (m *mockMessageConsumer) Start(ctx context.Context) error {
+	go func() {
+		<-ctx.Done()
+		stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = m.Stop(stopCtx)
+	}()
+	return nil
+}
 func (m *mockMessageConsumer) Stop(_ context.Context) error {
 	m.stopOnce.Do(func() { close(m.msgChan) })
 	return nil
