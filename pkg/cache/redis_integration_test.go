@@ -47,13 +47,13 @@ func TestRedisCache_Integration(t *testing.T) {
 		err := c.WriteToCache(ctx, key, value)
 		require.NoError(t, err)
 
-		retrieved, err := c.FetchFromCache(ctx, key)
+		retrieved, err := c.Fetch(ctx, key)
 		require.NoError(t, err)
 		assert.Equal(t, value, retrieved)
 	})
 
 	t.Run("Get Miss", func(t *testing.T) {
-		_, err := c.FetchFromCache(ctx, "non-existent-key")
+		_, err := c.Fetch(ctx, "non-existent-key")
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, redis.Nil) || strings.Contains(err.Error(), "key not found"), "Error should indicate a cache miss")
 	})
@@ -74,7 +74,7 @@ func TestRedisCache_Integration(t *testing.T) {
 		// as we are explicitly verifying a time-based feature.
 		time.Sleep(150 * time.Millisecond)
 
-		_, err = shortCache.FetchFromCache(ctx, key)
+		_, err = shortCache.Fetch(ctx, key)
 		require.Error(t, err, "Should get an error after TTL expires")
 	})
 }

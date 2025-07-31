@@ -75,14 +75,6 @@ func (s *FirestoreSource[K, V]) Close() error {
 	return nil
 }
 
-// ALLOW FIRESTORE TO BE USED IN LOW VOLUME DEPLOYMENTS
-// don't use it like this in high volume deployments - that's what redis is for.
-
-// FetchFromCache satisfies the Cache interface by calling the existing Fetch method.
-func (s *FirestoreSource[K, V]) FetchFromCache(ctx context.Context, key K) (V, error) {
-	return s.Fetch(ctx, key)
-}
-
 // WriteToCache satisfies the Cache interface by writing the document to Firestore.
 func (s *FirestoreSource[K, V]) WriteToCache(ctx context.Context, key K, value V) error {
 	stringKey := fmt.Sprintf("%v", key)

@@ -9,8 +9,13 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Fetcher is a generic function type for fetching data.
+// Fetcher is a generic function type for fetching data by a key
 type Fetcher[K any, V any] func(ctx context.Context, key K) (V, error)
+
+type CacheFetcher[K any, V any] interface {
+	Fetch(ctx context.Context, key K) (V, error)
+	Close() error
+}
 
 // SourceFetcher is a generic interface for a source of truth.
 type SourceFetcher[K any, V any] interface {
@@ -18,9 +23,9 @@ type SourceFetcher[K any, V any] interface {
 	io.Closer
 }
 
-// CachedFetcher is a generic interface for a caching layer.
-type CachedFetcher[K any, V any] interface {
-	FetchFromCache(ctx context.Context, key K) (V, error)
+// CachingFetcher is a generic interface for a caching layer that updates from a fallback
+type CachingFetcher[K any, V any] interface {
+	Fetch(ctx context.Context, key K) (V, error)
 	WriteToCache(ctx context.Context, key K, value V) error
 	io.Closer
 }
@@ -34,65 +39,63 @@ type FetcherConfig struct {
 // REFACTOR: The constructor no longer accepts a parentCtx.
 func NewCacheFallbackFetcher[K comparable, V any](
 	cfg *FetcherConfig,
-	cacheFetcher CachedFetcher[K, V],
+	cacheFetcher CachingFetcher[K, V],
 	sourceFetcher SourceFetcher[K, V],
 	logger zerolog.Logger,
-) (Fetcher[K, V], func() error, error) {
-	if cacheFetcher == nil {
-		return nil, nil, fmt.Errorf("cacheFetcher cannot be nil")
+) CacheFetcher[K, V] {
+	return CacheFallbackFetcher[K, V]{
+		cacheTimeout: cfg.CacheWriteTimeout,
+		logger:       logger,
+		fallback:     sourceFetcher,
+		cache:        cacheFetcher,
 	}
-	if sourceFetcher == nil {
-		return nil, nil, fmt.Errorf("sourceFetcher cannot be nil")
-	}
+}
 
-	fetchLogic := func(ctx context.Context, key K) (V, error) {
-		var zero V
-		// 1. Try to fetch from cache
-		value, err := cacheFetcher.FetchFromCache(ctx, key)
-		if err == nil {
-			logger.Debug().Msg("Cache hit.")
-			return value, nil
-		}
-		logger.Debug().Err(err).Msg("Cache miss. Falling back to source.")
+type CacheFallbackFetcher[K comparable, V any] struct {
+	cacheTimeout time.Duration
+	logger       zerolog.Logger
+	fallback     SourceFetcher[K, V]
+	cache        CachingFetcher[K, V]
+}
 
-		// 2. Cache miss, fallback to source
-		value, err = sourceFetcher.Fetch(ctx, key)
-		if err != nil {
-			logger.Error().Err(err).Msg("Error fetching from source.")
-			return zero, fmt.Errorf("error fetching from source: %w", err)
-		}
-		logger.Debug().Msg("Source hit. Writing back to cache.")
-
-		// 3. Source hit, write back to cache in the background.
-		// REFACTOR: The goroutine is now parented by context.Background to make it a
-		// true fire-and-forget operation, independent of any single request.
-		go func(k K, v V) {
-			writeCtx, cancel := context.WithTimeout(context.Background(), cfg.CacheWriteTimeout)
-			defer cancel()
-			if writeErr := cacheFetcher.WriteToCache(writeCtx, k, v); writeErr != nil {
-				logger.Error().Err(writeErr).Msg("Failed to write to cache in background.")
-			}
-		}(key, value)
-
+func (c CacheFallbackFetcher[K, V]) Fetch(ctx context.Context, key K) (V, error) {
+	var zero V
+	// 1. Try to fetch from cache
+	value, err := c.cache.Fetch(ctx, key)
+	if err == nil {
+		c.logger.Debug().Msg("Cache hit.")
 		return value, nil
 	}
+	c.logger.Debug().Err(err).Msg("Cache miss. Falling back to source.")
 
-	cleanupFunc := func() error {
-		log := logger.With().Str("component", "FallbackFetcherCleanup").Logger()
-		log.Info().Msg("Closing fallback fetcher resources...")
-		var firstErr error
-		if err := cacheFetcher.Close(); err != nil {
-			log.Error().Err(err).Msg("Error closing cache fetcher")
-			firstErr = err
-		}
-		if err := sourceFetcher.Close(); err != nil {
-			log.Error().Err(err).Msg("Error closing source fetcher")
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
-		return firstErr
+	// 2. Cache miss, fallback to source
+	value, err = c.fallback.Fetch(ctx, key)
+	if err != nil {
+		c.logger.Error().Err(err).Msg("Error fetching from source.")
+		return zero, fmt.Errorf("error fetching from source: %w", err)
 	}
+	c.logger.Debug().Msg("Source hit. Writing back to cache.")
 
-	return fetchLogic, cleanupFunc, nil
+	// 3. Source hit, write back to cache in the background.
+	go func(k K, v V) {
+		writeCtx, cancel := context.WithTimeout(ctx, c.cacheTimeout)
+		defer cancel()
+		if writeErr := c.cache.WriteToCache(writeCtx, k, v); writeErr != nil {
+			c.logger.Error().Err(writeErr).Msg("Failed to write to cache in background.")
+		}
+	}(key, value)
+
+	return value, nil
+}
+
+func (c CacheFallbackFetcher[K, V]) Close() error {
+	if err := c.cache.Close(); err != nil {
+		c.logger.Error().Err(err).Msg("Error closing cache.")
+		return fmt.Errorf("error closing cache: %w", err)
+	}
+	if err := c.fallback.Close(); err != nil {
+		c.logger.Error().Err(err).Msg("Error closing source.")
+		return fmt.Errorf("error closing source: %w", err)
+	}
+	return nil
 }

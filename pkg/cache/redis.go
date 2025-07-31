@@ -54,7 +54,7 @@ func NewRedisCache[K comparable, V any](
 }
 
 // FetchFromCache retrieves an item from the Redis cache.
-func (c *RedisCache[K, V]) FetchFromCache(ctx context.Context, key K) (V, error) {
+func (c *RedisCache[K, V]) Fetch(ctx context.Context, key K) (V, error) {
 	var zero V
 	stringKey := fmt.Sprintf("%v", key)
 	cachedData, err := c.redisClient.Get(ctx, stringKey).Result()
