@@ -6,7 +6,7 @@ package cache_test
 import (
 	"context"
 	"errors"
-	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,58 +23,127 @@ type redisTestValue struct {
 	Data []byte
 }
 
-func TestRedisCache_Integration(t *testing.T) {
+// newRawRedisClient is a test helper to connect directly to the emulator for verification.
+func newRawRedisClient(t *testing.T, addr string) *redis.Client {
+	t.Helper()
+	rdb := redis.NewClient(&redis.Options{Addr: addr})
+	t.Cleanup(func() { _ = rdb.Close() })
+	return rdb
+}
+
+func TestRedisCache_Fetch_Integration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 
-	// Assumes a helper that sets up a Redis Docker container for testing.
+	// Setup Redis emulator once for all sub-tests
 	rc := emulators.GetDefaultRedisImageContainer()
 	redisConn := emulators.SetupRedisContainer(t, ctx, rc)
 
-	cfg := &cache.RedisConfig{
+	baseCfg := &cache.RedisConfig{
 		Addr:     redisConn.EmulatorAddress,
 		CacheTTL: 1 * time.Minute,
 	}
 
-	c, err := cache.NewRedisCache[string, redisTestValue](ctx, cfg, zerolog.Nop())
+	t.Run("Miss with no fallback", func(t *testing.T) {
+		// Arrange
+		c, err := cache.NewRedisCache[string, redisTestValue](ctx, baseCfg, zerolog.Nop(), nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = c.Close() })
+
+		// Act
+		_, err = c.Fetch(ctx, "non-existent-key")
+
+		// Assert
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found in cache and no fallback is configured")
+	})
+
+	t.Run("Fallback success and cache write-back", func(t *testing.T) {
+		// Arrange
+		var fetcherCallCount atomic.Int32
+		expectedValue := redisTestValue{ID: "source-id", Data: []byte("source data")}
+		mockSource := &mockFetcher[string, redisTestValue]{
+			FetchFunc: func(ctx context.Context, key string) (redisTestValue, error) {
+				fetcherCallCount.Add(1)
+				if key == "source-key" {
+					return expectedValue, nil
+				}
+				return redisTestValue{}, errors.New("source not found")
+			},
+		}
+
+		c, err := cache.NewRedisCache[string, redisTestValue](ctx, baseCfg, zerolog.Nop(), mockSource)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = c.Close() })
+
+		// Act 1: First fetch misses Redis, hits the fallback source, and triggers async write-back.
+		val1, err1 := c.Fetch(ctx, "source-key")
+
+		// Assert 1: Check that the value is correct and the fallback was called.
+		require.NoError(t, err1)
+		assert.Equal(t, expectedValue, val1)
+		assert.Equal(t, int32(1), fetcherCallCount.Load())
+
+		// Assert 2: Wait for the async write-back to complete by polling Redis directly.
+		rawClient := newRawRedisClient(t, redisConn.EmulatorAddress)
+		require.Eventually(t, func() bool {
+			res, err := rawClient.Exists(ctx, "source-key").Result()
+			return err == nil && res == 1
+		}, 2*time.Second, 50*time.Millisecond, "Key was not written back to Redis cache in time")
+
+		// Act 3: Second fetch should now be a definitive cache hit.
+		val2, err2 := c.Fetch(ctx, "source-key")
+
+		// Assert 3: Verify the value is correct and the fallback was NOT called again.
+		require.NoError(t, err2)
+		assert.Equal(t, expectedValue, val2)
+		assert.Equal(t, int32(1), fetcherCallCount.Load(), "Fallback should not be called again on a cache hit")
+	})
+}
+
+func TestRedisCache_TTL_Integration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
+
+	rc := emulators.GetDefaultRedisImageContainer()
+	redisConn := emulators.SetupRedisContainer(t, ctx, rc)
+	rawClient := newRawRedisClient(t, redisConn.EmulatorAddress)
+
+	// Arrange
+	var fetcherCallCount atomic.Int32
+	mockSource := &mockFetcher[string, string]{
+		FetchFunc: func(ctx context.Context, key string) (string, error) {
+			fetcherCallCount.Add(1)
+			return "fresh-data", nil
+		},
+	}
+
+	shortTTLCfg := &cache.RedisConfig{Addr: redisConn.EmulatorAddress, CacheTTL: 150 * time.Millisecond}
+	c, err := cache.NewRedisCache[string, string](ctx, shortTTLCfg, zerolog.Nop(), mockSource)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 
-	t.Run("Set and Get", func(t *testing.T) {
-		key := "test-key-1"
-		value := redisTestValue{ID: "test-id", Data: []byte("hello world")}
+	// Act 1: Populate the cache via fallback.
+	_, err = c.Fetch(ctx, "ttl-key")
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), fetcherCallCount.Load(), "Fallback should be called on the first fetch")
 
-		err := c.WriteToCache(ctx, key, value)
-		require.NoError(t, err)
+	// Wait for the key to appear in Redis.
+	require.Eventually(t, func() bool {
+		res, err := rawClient.Exists(ctx, "ttl-key").Result()
+		return err == nil && res == 1
+	}, 2*time.Second, 50*time.Millisecond, "Key did not appear in Redis after first fetch")
 
-		retrieved, err := c.Fetch(ctx, key)
-		require.NoError(t, err)
-		assert.Equal(t, value, retrieved)
-	})
+	// Act 2: Verify it's a cache hit immediately after.
+	_, err = c.Fetch(ctx, "ttl-key")
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), fetcherCallCount.Load(), "Fallback should not be called on immediate second fetch")
 
-	t.Run("Get Miss", func(t *testing.T) {
-		_, err := c.Fetch(ctx, "non-existent-key")
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, redis.Nil) || strings.Contains(err.Error(), "key not found"), "Error should indicate a cache miss")
-	})
+	// Act 3: Wait for TTL to expire and fetch again.
+	time.Sleep(200 * time.Millisecond)
+	_, err = c.Fetch(ctx, "ttl-key")
+	require.NoError(t, err)
 
-	t.Run("TTL Expires", func(t *testing.T) {
-		// Create a new cache with a very short TTL for this specific test.
-		shortTTLCfg := &cache.RedisConfig{Addr: redisConn.EmulatorAddress, CacheTTL: 100 * time.Millisecond}
-		shortCache, err := cache.NewRedisCache[string, redisTestValue](ctx, shortTTLCfg, zerolog.Nop())
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = shortCache.Close() })
-
-		key := "ttl-key"
-		value := redisTestValue{ID: "ttl-id"}
-		err = shortCache.WriteToCache(ctx, key, value)
-		require.NoError(t, err)
-
-		// This is one of the few acceptable uses of time.Sleep in a test,
-		// as we are explicitly verifying a time-based feature.
-		time.Sleep(150 * time.Millisecond)
-
-		_, err = shortCache.Fetch(ctx, key)
-		require.Error(t, err, "Should get an error after TTL expires")
-	})
+	// Assert 3: The fallback should have been called a second time.
+	assert.Equal(t, int32(2), fetcherCallCount.Load(), "Fallback should be called again after TTL expires")
 }

@@ -1,11 +1,17 @@
 package cache
 
-import "context"
+import (
+	"context"
+	"io"
+)
 
-// Cache is a generic interface for a caching layer.
-type Cache[K any, V any] interface {
-	// FetchFromCache retrieves an item from the cache.
-	FetchFromCache(ctx context.Context, key K) (V, error)
-	// WriteToCache adds an item to the cache.
-	WriteToCache(ctx context.Context, key K, value V) error
+// Fetcher defines the public, read-only contract for any component
+// that can retrieve data by a key. This is the primary interface
+// that consuming services should depend on.
+type Fetcher[K comparable, V any] interface {
+	// Fetch retrieves a value by its key. The implementation is responsible
+	// for its own retrieval logic, which may include falling back to another
+	// Fetcher.
+	Fetch(ctx context.Context, key K) (V, error)
+	io.Closer
 }

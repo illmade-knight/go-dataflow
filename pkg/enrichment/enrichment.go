@@ -8,6 +8,10 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// Fetcher is a generic function type for fetching data by a key.
+// This is the dependency contract for the NewEnricherFunc factory.
+type Fetcher[K any, V any] func(ctx context.Context, key K) (V, error)
+
 // --- Generic Enrichment Components ---
 
 // MessageEnricher defines a function that **enriches** a `Message` in-place by

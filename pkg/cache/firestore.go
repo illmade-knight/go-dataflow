@@ -16,73 +16,63 @@ type FirestoreConfig struct {
 	CollectionName string
 }
 
-// FirestoreSource is a generic data fetcher for a specific Firestore collection.
-// It acts as a "source of truth" that a cache can pull from.
-type FirestoreSource[K comparable, V any] struct {
+// Firestore is a generic data fetcher for a specific Firestore collection.
+// It implements the Fetcher interface and acts as a "source of truth"
+// that a caching Fetcher can use as a fallback.
+type Firestore[K comparable, V any] struct {
 	client         *firestore.Client
 	collectionName string
 	logger         zerolog.Logger
 }
 
-// NewFirestoreSource creates a new generic FirestoreSource.
-// REFACTOR: Reordered parameters for consistency (config, dependencies, logger).
-func NewFirestoreSource[K comparable, V any](
+// NewFirestore creates a new generic Firestore Fetcher.
+func NewFirestore[K comparable, V any](
+	_ context.Context, // Included for API consistency, though not used in this constructor.
 	cfg *FirestoreConfig,
 	client *firestore.Client,
 	logger zerolog.Logger,
-) (*FirestoreSource[K, V], error) {
+) (*Firestore[K, V], error) {
 	if client == nil {
 		return nil, fmt.Errorf("firestore client cannot be nil")
 	}
 
-	logger.Info().Str("project_id", cfg.ProjectID).Str("collection", cfg.CollectionName).Msg("FirestoreSource initialized.")
+	logger.Info().Str("project_id", cfg.ProjectID).Str("collection", cfg.CollectionName).Msg("Firestore Fetcher initialized.")
 
-	return &FirestoreSource[K, V]{
+	return &Firestore[K, V]{
 		client:         client,
 		collectionName: cfg.CollectionName,
-		logger:         logger.With().Str("component", "FirestoreSource").Logger(),
+		logger:         logger.With().Str("component", "FirestoreFetcher").Logger(),
 	}, nil
 }
 
 // Fetch retrieves a single document from Firestore by its key.
-func (s *FirestoreSource[K, V]) Fetch(ctx context.Context, key K) (V, error) {
+func (f *Firestore[K, V]) Fetch(ctx context.Context, key K) (V, error) {
 	var zero V
 	stringKey := fmt.Sprintf("%v", key)
-	docRef := s.client.Collection(s.collectionName).Doc(stringKey)
+	docRef := f.client.Collection(f.collectionName).Doc(stringKey)
 	docSnap, err := docRef.Get(ctx)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
-			s.logger.Warn().Str("key", stringKey).Msg("Document not found in Firestore.")
+			f.logger.Warn().Str("key", stringKey).Msg("Document not found in Firestore.")
 			return zero, fmt.Errorf("document not found: %w", err)
 		}
-		s.logger.Error().Err(err).Str("key", stringKey).Msg("Failed to get document from Firestore.")
+		f.logger.Error().Err(err).Str("key", stringKey).Msg("Failed to get document from Firestore.")
 		return zero, fmt.Errorf("firestore get for %s: %w", stringKey, err)
 	}
 
 	var value V
 	if err := docSnap.DataTo(&value); err != nil {
-		s.logger.Error().Err(err).Str("key", stringKey).Msg("Failed to map Firestore document data.")
+		f.logger.Error().Err(err).Str("key", stringKey).Msg("Failed to map Firestore document data.")
 		return zero, fmt.Errorf("firestore DataTo for %s: %w", stringKey, err)
 	}
 
-	s.logger.Debug().Str("key", stringKey).Msg("Successfully fetched data from Firestore.")
+	f.logger.Debug().Str("key", stringKey).Msg("Successfully fetched data from Firestore.")
 	return value, nil
 }
 
-// Close is a no-op as the Firestore client's lifecycle is managed externally.
-func (s *FirestoreSource[K, V]) Close() error {
-	s.logger.Info().Msg("FirestoreSource does not close the injected Firestore client.")
-	return nil
-}
-
-// WriteToCache satisfies the Cache interface by writing the document to Firestore.
-func (s *FirestoreSource[K, V]) WriteToCache(ctx context.Context, key K, value V) error {
-	stringKey := fmt.Sprintf("%v", key)
-	_, err := s.client.Collection(s.collectionName).Doc(stringKey).Set(ctx, value)
-	if err != nil {
-		s.logger.Error().Err(err).Str("key", stringKey).Msg("Failed to write document to Firestore.")
-		return fmt.Errorf("firestore set for %s: %w", stringKey, err)
-	}
-	s.logger.Debug().Str("key", stringKey).Msg("Successfully wrote data to Firestore.")
+// Close is a no-op as the Firestore client's lifecycle is managed externally by the
+// service that creates and injects it. This satisfies the io.Closer part of the Fetcher interface.
+func (f *Firestore[K, V]) Close() error {
+	f.logger.Info().Msg("Firestore Fetcher does not close the injected Firestore client.")
 	return nil
 }

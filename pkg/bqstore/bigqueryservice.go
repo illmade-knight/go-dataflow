@@ -1,3 +1,6 @@
+// Package bqstore provides components for creating data processing pipelines that
+// sink data into Google BigQuery. It offers a high-level service factory that
+// integrates with the generic messagepipeline services to simplify development.
 package bqstore
 
 import (
@@ -9,7 +12,15 @@ import (
 )
 
 // NewBigQueryService is a high-level constructor that assembles and returns a
-// fully configured BigQuery processing pipeline using the generic BatchingService.
+// fully configured data processing pipeline that sinks data into BigQuery.
+//
+// It simplifies pipeline creation by wrapping the generic messagepipeline.BatchingService
+// with a pre-configured batch processor function. This processor is responsible for:
+//  1. Extracting typed payloads from a batch of messages.
+//  2. Inserting the batch into BigQuery using the provided DataBatchInserter.
+//  3. Acknowledging (Ack) all messages in the batch on a successful insert.
+//  4. Negative-acknowledging (Nack) all messages on a failed insert, ensuring
+//     the entire batch can be re-processed for at-least-once delivery.
 func NewBigQueryService[T any](
 	cfg messagepipeline.BatchingServiceConfig,
 	consumer messagepipeline.MessageConsumer,
@@ -18,7 +29,7 @@ func NewBigQueryService[T any](
 	logger zerolog.Logger,
 ) (*messagepipeline.BatchingService[T], error) {
 
-	// 1. Define the BatchProcessor function. This is the final stage of the pipeline.
+	// Define the BatchProcessor function. This is the final stage of the pipeline.
 	batchProcessor := func(ctx context.Context, batch []messagepipeline.ProcessableItem[T]) error {
 		if len(batch) == 0 {
 			return nil
@@ -30,7 +41,7 @@ func NewBigQueryService[T any](
 			payloads[i] = item.Payload
 		}
 
-		// 2. Call the underlying data inserter.
+		// Call the underlying data inserter.
 		if err := bqInserter.InsertBatch(ctx, payloads); err != nil {
 			logger.Error().Err(err).Int("batch_size", len(batch)).Msg("Failed to insert batch, Nacking all messages.")
 			for _, item := range batch {
@@ -39,7 +50,7 @@ func NewBigQueryService[T any](
 			return err // Propagate the error.
 		}
 
-		// 3. On success, Ack all original messages.
+		// On success, Ack all original messages.
 		logger.Info().Int("batch_size", len(batch)).Msg("Successfully inserted batch, Acking all messages.")
 		for _, item := range batch {
 			item.Original.Ack()
@@ -47,7 +58,7 @@ func NewBigQueryService[T any](
 		return nil
 	}
 
-	// 4. Assemble the pipeline using the generic BatchingService.
+	// Assemble the pipeline using the generic BatchingService.
 	genericService, err := messagepipeline.NewBatchingService[T](
 		cfg,
 		consumer,

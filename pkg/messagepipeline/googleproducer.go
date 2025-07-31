@@ -13,11 +13,13 @@ import (
 // GooglePubsubProducerConfig holds configuration for the Google Pub/Sub producer.
 type GooglePubsubProducerConfig struct {
 	TopicID string
-	// Timeout for the initial check to see if the topic exists.
+	// TopicExistsTimeout is the timeout for the initial check to see if the topic exists.
 	TopicExistsTimeout time.Duration
-	// Batching settings for the underlying Google Pub/Sub client.
-	BatchDelay        time.Duration
-	BatchSize         int
+	// BatchDelay is the maximum time the client will wait before sending a batch.
+	BatchDelay time.Duration
+	// BatchSize is the maximum number of messages in a batch.
+	BatchSize int
+	// PublishGoroutines is the number of goroutines used for publishing messages.
 	PublishGoroutines int
 }
 
@@ -31,16 +33,17 @@ func NewGooglePubsubProducerDefaults() *GooglePubsubProducerConfig {
 	}
 }
 
-// GooglePubsubProducer is a lightweight client for publishing messages to a
+// GooglePubsubProducer is a client for publishing messages to a
 // Google Cloud Pub/Sub topic. It wraps the underlying client, providing a
-// simple Publish method.
+// simple Publish method and handling topic validation and batching configuration.
 type GooglePubsubProducer struct {
 	topic  *pubsub.Topic
 	logger zerolog.Logger
 }
 
 // NewGooglePubsubProducer creates a new GooglePubsubProducer. It validates the
-// topic's existence before returning a functional producer.
+// topic's existence before returning a functional producer. The provided context
+// is used for the initial topic existence check.
 func NewGooglePubsubProducer(
 	ctx context.Context,
 	cfg *GooglePubsubProducerConfig,
@@ -77,8 +80,14 @@ func NewGooglePubsubProducer(
 }
 
 // Publish marshals the provided MessageData and sends it to the Pub/Sub topic.
-// It returns the server-assigned message ID and an error if the publish fails.
-// This function is non-blocking; the underlying client handles publishing in the background.
+// It returns the server-assigned message ID upon successful receipt by the server.
+//
+// This function blocks until the publish result is received from the Pub/Sub server
+// or the provided context is cancelled.
+//
+// To prevent message processing issues, it is the caller's responsibility to ensure
+// that the `data.Payload` field contains the raw message payload, not a
+// pre-serialized `MessageData` object, which would lead to double-wrapping.
 func (p *GooglePubsubProducer) Publish(ctx context.Context, data MessageData) (string, error) {
 	payload, err := json.Marshal(data)
 	if err != nil {
@@ -103,11 +112,27 @@ func (p *GooglePubsubProducer) Publish(ctx context.Context, data MessageData) (s
 }
 
 // Stop flushes any buffered messages and stops the underlying topic client.
+// It accepts a context to enforce a timeout on the shutdown process.
 // This should be called during a graceful shutdown of the application.
-func (p *GooglePubsubProducer) Stop() {
-	if p.topic != nil {
-		p.logger.Info().Msg("Flushing messages and stopping Pub/Sub topic...")
+func (p *GooglePubsubProducer) Stop(ctx context.Context) error {
+	if p.topic == nil {
+		return nil
+	}
+
+	p.logger.Info().Msg("Flushing messages and stopping Pub/Sub topic...")
+	// Wrap topic.Stop() to respect the context timeout.
+	stopDone := make(chan struct{})
+	go func() {
 		p.topic.Stop()
+		close(stopDone)
+	}()
+
+	select {
+	case <-stopDone:
 		p.logger.Info().Msg("Pub/Sub topic stopped.")
+		return nil // Graceful shutdown completed.
+	case <-ctx.Done():
+		p.logger.Error().Err(ctx.Err()).Msg("Timeout waiting for Pub/Sub topic to stop gracefully.")
+		return ctx.Err() // Shutdown timed out.
 	}
 }

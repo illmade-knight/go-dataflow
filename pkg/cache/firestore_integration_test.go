@@ -23,7 +23,7 @@ type firestoreTestValue struct {
 	Count int
 }
 
-func TestFirestoreSource_Integration(t *testing.T) {
+func TestFirestore_Integration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 
@@ -38,26 +38,27 @@ func TestFirestoreSource_Integration(t *testing.T) {
 	// Pre-populate data for the test
 	client, err := firestore.NewClient(ctx, projectID, firestoreConn.ClientOptions...)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
 	docData := firestoreTestValue{Name: "test-item", Count: 42}
 	_, err = client.Collection(collectionName).Doc(docID).Set(ctx, docData)
 	require.NoError(t, err)
 
-	// Create the FirestoreSource instance
+	// Create the Firestore Fetcher instance
 	cfg := &cache.FirestoreConfig{
 		ProjectID:      projectID,
 		CollectionName: collectionName,
 	}
-	source, err := cache.NewFirestoreSource[string, firestoreTestValue](cfg, client, zerolog.Nop())
+	fetcher, err := cache.NewFirestore[string, firestoreTestValue](ctx, cfg, client, zerolog.Nop())
 	require.NoError(t, err)
 
 	t.Run("Fetch Hit", func(t *testing.T) {
-		retrieved, err := source.Fetch(ctx, docID)
+		retrieved, err := fetcher.Fetch(ctx, docID)
 		require.NoError(t, err)
 		assert.Equal(t, docData, retrieved)
 	})
 
 	t.Run("Fetch Miss", func(t *testing.T) {
-		_, err := source.Fetch(ctx, "non-existent-doc")
+		_, err := fetcher.Fetch(ctx, "non-existent-doc")
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok, "Error should be a gRPC status error")

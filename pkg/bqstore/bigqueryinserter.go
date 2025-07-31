@@ -11,10 +11,13 @@ import (
 	"google.golang.org/api/option"
 )
 
-// DataBatchInserter is a generic interface for inserting a batch of items.
-// It abstracts the destination data store (e.g., BigQuery, Postgres, etc.).
+// DataBatchInserter is a generic interface for inserting a batch of items into a
+// data store. It abstracts the destination (e.g., BigQuery, Postgres, etc.),
+// making pipeline components more modular and testable.
 type DataBatchInserter[T any] interface {
+	// InsertBatch inserts a slice of items into the data store.
 	InsertBatch(ctx context.Context, items []*T) error
+	// Close handles any necessary cleanup of the inserter's resources.
 	Close() error
 }
 
@@ -44,7 +47,8 @@ func NewProductionBigQueryClient(ctx context.Context, projectID string, credenti
 	return client, nil
 }
 
-// BigQueryInserter implements the DataBatchInserter interface for Google BigQuery.
+// BigQueryInserter implements the DataBatchInserter interface for Google BigQuery,
+// providing a mechanism to stream data into a specified table.
 type BigQueryInserter[T any] struct {
 	client   *bigquery.Client
 	table    *bigquery.Table
@@ -52,8 +56,13 @@ type BigQueryInserter[T any] struct {
 	logger   zerolog.Logger
 }
 
-// NewBigQueryInserter creates a new inserter for a specified type T.
-// If the target table does not exist, it attempts to create it by inferring the schema.
+// NewBigQueryInserter creates a new inserter for a specified BigQuery table.
+//
+// The provided context is used for initial API calls to verify and potentially
+// create the target table. If the table specified in the config does not exist,
+// this function will attempt to create it by inferring a schema from the provided
+// generic type T. This simplifies deployment by removing the need for manual
+// table creation for new data types.
 func NewBigQueryInserter[T any](
 	ctx context.Context,
 	client *bigquery.Client,
@@ -100,7 +109,12 @@ func NewBigQueryInserter[T any](
 	}, nil
 }
 
-// InsertBatch streams a batch of items of type T to BigQuery.
+// InsertBatch streams a batch of items of type T to the configured BigQuery table
+// using the BigQuery Storage Write API for high-throughput streaming.
+//
+// It handles row-level insertion errors by logging detailed information for each
+// failed row, which is crucial for debugging data quality issues. If any row fails,
+// the method returns an error wrapping the `bigquery.PutMultiError`.
 func (i *BigQueryInserter[T]) InsertBatch(ctx context.Context, items []*T) error {
 	if len(items) == 0 {
 		i.logger.Info().Msg("InsertBatch called with an empty slice, nothing to do.")
@@ -124,7 +138,8 @@ func (i *BigQueryInserter[T]) InsertBatch(ctx context.Context, items []*T) error
 	return nil
 }
 
-// Close is a no-op for this implementation.
+// Close is a no-op for this implementation, as the underlying BigQuery client's
+// lifecycle is managed externally by the service that created it.
 func (i *BigQueryInserter[T]) Close() error {
 	i.logger.Info().Msg("BigQueryInserter.Close() called; client lifecycle is managed externally.")
 	return nil

@@ -4,6 +4,7 @@ package messagepipeline_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,7 +56,7 @@ func TestGooglePubsubConsumer_Lifecycle_And_MessageReception(t *testing.T) {
 
 	// Publish a test message
 	topic := client.Topic(topicID)
-	t.Cleanup(func() { topic.Stop() }) // Ensure topic is stopped cleanly.
+	t.Cleanup(func() { topic.Stop() })
 
 	msgPayload := []byte("hello world")
 	msgAttributes := map[string]string{
@@ -72,19 +73,38 @@ func TestGooglePubsubConsumer_Lifecycle_And_MessageReception(t *testing.T) {
 
 	// --- Assert: Receive and Verify Message ---
 	var receivedMsg messagepipeline.Message
-	select {
-	case receivedMsg = <-consumer.Messages():
-		// Message received, proceed to assertions
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for message")
-	}
+	var mu sync.Mutex
 
+	// Start a goroutine to listen for the message from the consumer's channel.
+	go func() {
+		select {
+		case msg := <-consumer.Messages():
+			mu.Lock()
+			receivedMsg = msg
+			mu.Unlock()
+		case <-consumerCtx.Done():
+			// Consumer context was cancelled, nothing to do.
+			return
+		}
+	}()
+
+	// Use require.Eventually to poll until the message is received.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		// The condition is met if the message ID is not empty.
+		return receivedMsg.ID != ""
+	}, 10*time.Second, 100*time.Millisecond, "timed out waiting for message")
+
+	// Now that we have the message, we can safely access it and assert on its contents.
+	mu.Lock()
 	assert.Equal(t, msgPayload, receivedMsg.Payload)
 	require.NotNil(t, receivedMsg.Attributes)
 	assert.Equal(t, "device-123", receivedMsg.Attributes["uid"])
 	assert.Equal(t, "garden", receivedMsg.Attributes["location"])
 	assert.NotContains(t, receivedMsg.Attributes, "EnrichmentData", "Consumer should not populate EnrichmentData")
 	receivedMsg.Ack()
+	mu.Unlock()
 
 	// --- Act: Stop and Verify Shutdown ---
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)

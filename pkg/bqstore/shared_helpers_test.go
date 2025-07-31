@@ -3,6 +3,7 @@ package bqstore_test
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/rs/zerolog/log"
@@ -65,7 +66,10 @@ func (m *MockMessageConsumer) Messages() <-chan messagepipeline.Message { return
 func (m *MockMessageConsumer) Start(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
-		_ = m.Stop(context.Background())
+		// Use a new context with a timeout for the stop procedure.
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = m.Stop(stopCtx)
 	}()
 	return nil
 }

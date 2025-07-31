@@ -67,7 +67,7 @@ func setupTestPubsub(t *testing.T, projectID, topicID, subID string) (*pubsub.Cl
 //  Test Cases for GooglePubsubProducer
 // =============================================================================
 
-func TestGooglePubsubProducer_Publish(t *testing.T) {
+func TestGooglePubsubProducer_PublishAndStop(t *testing.T) {
 	// --- Arrange ---
 	testCtx, testCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(testCancel)
@@ -85,10 +85,8 @@ func TestGooglePubsubProducer_Publish(t *testing.T) {
 
 	producer, err := messagepipeline.NewGooglePubsubProducer(testCtx, producerConfig, pubsubClient, zerolog.Nop())
 	require.NoError(t, err)
-	t.Cleanup(producer.Stop) // Ensure producer is stopped cleanly.
 
 	// --- Act ---
-	// Create the message data to be published.
 	msgToPublish := messagepipeline.MessageData{
 		ID:          "test-id-123",
 		Payload:     []byte("hello producer"),
@@ -98,28 +96,23 @@ func TestGooglePubsubProducer_Publish(t *testing.T) {
 		},
 	}
 
-	// Publish the message. We use a separate context for the publish call itself.
-	publishCtx, publishCancel := context.WithTimeout(testCtx, 5*time.Second)
-	t.Cleanup(publishCancel)
-
-	publishedID, err := producer.Publish(publishCtx, msgToPublish)
+	publishedID, err := producer.Publish(testCtx, msgToPublish)
 	require.NoError(t, err)
 	require.NotEmpty(t, publishedID)
 
 	// --- Assert ---
 	// Receive the message from the subscription to verify it was published correctly.
-	var wg sync.WaitGroup
-	wg.Add(1)
+	var mu sync.Mutex
 	var receivedMsg *pubsub.Message
 
-	// Use a cancellable context for the receiver.
 	receiveCtx, receiveCancel := context.WithCancel(testCtx)
 	t.Cleanup(receiveCancel)
 
 	go func() {
-		defer wg.Done()
 		err := subscription.Receive(receiveCtx, func(ctx context.Context, msg *pubsub.Message) {
+			mu.Lock()
 			receivedMsg = msg
+			mu.Unlock()
 			msg.Ack()
 			receiveCancel() // Stop receiving after the first message.
 		})
@@ -128,9 +121,12 @@ func TestGooglePubsubProducer_Publish(t *testing.T) {
 		}
 	}()
 
-	wg.Wait() // Wait for the receiver to finish.
-
-	require.NotNil(t, receivedMsg, "Did not receive message from subscription")
+	// Wait for the receiver to get the message.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return receivedMsg != nil
+	}, 5*time.Second, 50*time.Millisecond, "Did not receive message from subscription")
 
 	// Unmarshal the received data and compare it to the original.
 	var receivedData messagepipeline.MessageData
@@ -141,4 +137,10 @@ func TestGooglePubsubProducer_Publish(t *testing.T) {
 	assert.Equal(t, msgToPublish.Payload, receivedData.Payload)
 	assert.WithinDuration(t, msgToPublish.PublishTime, receivedData.PublishTime, time.Second)
 	assert.Equal(t, msgToPublish.EnrichmentData["source"], receivedData.EnrichmentData["source"])
+
+	// --- Act & Assert: Stop ---
+	stopCtx, stopCancel := context.WithTimeout(testCtx, 2*time.Second)
+	t.Cleanup(stopCancel)
+	err = producer.Stop(stopCtx)
+	require.NoError(t, err, "producer.Stop() should not return an error on graceful shutdown")
 }
