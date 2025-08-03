@@ -44,13 +44,16 @@ func TestMqttPipeline_Integration(t *testing.T) {
 	mqttCfg.BrokerURL = mqttConnection.EmulatorAddress
 	mqttCfg.Topic = mqttTopic
 	mqttCfg.ClientIDPrefix = "ingestion-test-"
-	consumer, err := mqttconverter.NewMqttConsumer(mqttCfg, logger)
+	consumer, err := mqttconverter.NewMqttConsumer(mqttCfg, logger, 10)
 	require.NoError(t, err)
 
 	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
+	producerCfg.TopicID = outputTopicID
 	producer, err := messagepipeline.NewGooglePubsubProducer(ctx, producerCfg, psClient, logger)
 	require.NoError(t, err)
-	t.Cleanup(producer.Stop)
+	t.Cleanup(func() {
+		_ = producer.Stop(ctx)
+	})
 
 	processor := func(ctx context.Context, original messagepipeline.Message, payload *mqttconverter.RawMessage) error {
 		outgoingData := messagepipeline.MessageData{

@@ -44,7 +44,6 @@ type BaseServer struct {
 }
 
 // NewBaseServer creates and initializes a new BaseServer.
-// It normalizes the provided httpPort to ensure it's a valid listen address.
 func NewBaseServer(logger zerolog.Logger, httpPort string) *BaseServer {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", HealthzHandler)
@@ -93,7 +92,7 @@ func (s *BaseServer) Start() error {
 	return nil
 }
 
-// Shutdown gracefully stops the HTTP server, respecting the provided context's deadline.
+// Shutdown gracefully stops the HTTP server.
 func (s *BaseServer) Shutdown(ctx context.Context) error {
 	s.Logger.Info().Msg("Shutting down HTTP server...")
 	if err := s.httpServer.Shutdown(ctx); err != nil {
