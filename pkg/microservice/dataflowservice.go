@@ -49,21 +49,17 @@ func NewBaseServer(logger zerolog.Logger, httpPort string) *BaseServer {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", HealthzHandler)
 
-	// REFACTOR: Normalize the port to handle different configuration styles
-	// and support environment variables like PORT from Cloud Run.
 	listenAddr := httpPort
 	if listenAddr == "" {
-		// Default to 8080 if nothing is provided.
 		listenAddr = "8080"
 	}
 	if !strings.HasPrefix(listenAddr, ":") {
-		// Prepend colon if the port is just a number (e.g., "8081").
 		listenAddr = ":" + listenAddr
 	}
 
 	return &BaseServer{
 		Logger:   logger,
-		HTTPPort: listenAddr, // Store the normalized address.
+		HTTPPort: listenAddr,
 		mux:      mux,
 		httpServer: &http.Server{
 			Addr:    listenAddr,
@@ -72,9 +68,9 @@ func NewBaseServer(logger zerolog.Logger, httpPort string) *BaseServer {
 	}
 }
 
-// Start initiates the HTTP server in a background goroutine.
+// EDITED: The Start method is now a blocking call.
+// It starts the HTTP server and only returns when the server is closed.
 func (s *BaseServer) Start() error {
-	// s.HTTPPort is now guaranteed to be in the correct format (e.g., ":8080").
 	listener, err := net.Listen("tcp", s.HTTPPort)
 	if err != nil {
 		return fmt.Errorf("failed to listen on port %s: %w", s.HTTPPort, err)
@@ -86,12 +82,14 @@ func (s *BaseServer) Start() error {
 
 	s.Logger.Info().Str("address", s.actualAddr).Msg("HTTP server starting to listen")
 
-	go func() {
-		if err := s.httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.Logger.Error().Err(err).Msg("HTTP server failed")
-		}
-	}()
+	// This is a blocking call. It will run until the server is shut down.
+	if err := s.httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		s.Logger.Error().Err(err).Msg("HTTP server failed")
+		return err // Return the error from Serve.
+	}
 
+	// This part will only be reached after the server has been shut down.
+	s.Logger.Info().Msg("HTTP server has stopped listening.")
 	return nil
 }
 
@@ -107,13 +105,11 @@ func (s *BaseServer) Shutdown(ctx context.Context) error {
 }
 
 // GetHTTPPort returns the actual network port the server is listening on.
-// This is useful when port "0" is used to request a random free port.
 func (s *BaseServer) GetHTTPPort() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	_, port, err := net.SplitHostPort(s.actualAddr)
 	if err != nil {
-		// Fallback to the configured address if split fails.
 		return s.HTTPPort
 	}
 	return ":" + port

@@ -22,6 +22,23 @@ Once you have created the refactor files
 **Specifics**
 in tests prefer the use of t.Cleanup() to defer
 
+We do not like the golang convention of (this is pseudo code obviously)
+
+````
+if a, err := foobar(arguements ..); err != nil {
+    do something
+}
+````
+
+we prefer the more verbose but more standard coding of
+
+````
+a, err := foobar(argument ..)
+if err != nil {
+    do something
+}
+````
+
 use foobar_test at the top of test files - e.g in a package cache the test should use cache_test at the top instead of just cache
 
 create an overall context for tests with a timeout
