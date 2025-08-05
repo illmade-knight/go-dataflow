@@ -15,3 +15,11 @@ type Fetcher[K comparable, V any] interface {
 	Fetch(ctx context.Context, key K) (V, error)
 	io.Closer
 }
+
+// Cache read/write/invalidate interface
+type Cache[K comparable, V any] interface {
+	Fetcher[K, V] // Embeds Fetch and Close methods
+	Invalidate(ctx context.Context, key K) error
+	// We could also add a Write method for direct cache writes, at the moment we let the implementation decide
+	// Write(ctx context.Context, key K, value V) error
+}

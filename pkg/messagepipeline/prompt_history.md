@@ -1,5 +1,3 @@
-
-
 ## The refactor
 
 We've realized making this package generic was a mistake.

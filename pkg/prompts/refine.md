@@ -101,3 +101,7 @@ If the refactor revisits a previously refactored file indicate this and whether 
 The initial review should be exactly the same as that for the other packages. 
 Pay particular attention to the use of context. Review NewFunc() parameter order. Document correctly. 
 Use our rigorous test patterns, avoiding sleep, use t.Cleanup. 
+
+## Today's Task
+
+is to ...

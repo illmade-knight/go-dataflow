@@ -101,6 +101,11 @@ func (c *RedisCache[K, V]) Fetch(ctx context.Context, key K) (V, error) {
 	return sourceValue, nil
 }
 
+func (c *RedisCache[K, V]) Invalidate(ctx context.Context, key K) error {
+	stringKey := fmt.Sprintf("%v", key)
+	return c.redisClient.Del(ctx, stringKey).Err()
+}
+
 // fetchFromRedis is an unexported method to get a value directly from Redis.
 func (c *RedisCache[K, V]) fetchFromRedis(ctx context.Context, key K) (V, error) {
 	var zero V

@@ -57,6 +57,13 @@ func (c *InMemoryCache[K, V]) Fetch(ctx context.Context, key K) (V, error) {
 	return sourceValue, nil
 }
 
+func (c *InMemoryCache[K, V]) Invalidate(_ context.Context, key K) error {
+	c.mu.Lock()
+	delete(c.data, key)
+	c.mu.Unlock()
+	return nil
+}
+
 // write adds an item to the cache. This method is unexported as it's an
 // internal implementation detail of the Fetch-with-fallback logic.
 func (c *InMemoryCache[K, V]) write(_ context.Context, key K, value V) error {
