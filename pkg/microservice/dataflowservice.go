@@ -41,6 +41,7 @@ type BaseServer struct {
 	mux        *http.ServeMux
 	actualAddr string
 	mu         sync.RWMutex
+	readyChan  chan struct{}
 }
 
 // NewBaseServer creates and initializes a new BaseServer.
@@ -67,6 +68,10 @@ func NewBaseServer(logger zerolog.Logger, httpPort string) *BaseServer {
 	}
 }
 
+func (s *BaseServer) SetReadyChannel(ch chan struct{}) {
+	s.readyChan = ch
+}
+
 // EDITED: The Start method is now a blocking call.
 // It starts the HTTP server and only returns when the server is closed.
 func (s *BaseServer) Start() error {
@@ -81,6 +86,11 @@ func (s *BaseServer) Start() error {
 
 	s.Logger.Info().Str("address", s.actualAddr).Msg("HTTP server starting to listen")
 
+	// REFACTOR: If the implementation provided a ready channel, close it now.
+	if s.readyChan != nil {
+		close(s.readyChan)
+	}
+	
 	// This is a blocking call. It will run until the server is shut down.
 	if err := s.httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		s.Logger.Error().Err(err).Msg("HTTP server failed")

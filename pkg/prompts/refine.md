@@ -14,7 +14,7 @@ Consider carefully existing patterns and only suggest changes if you see real er
 
 If you see patterns that are not idiomatic or are considered outdated, highlight them and ask if they should be changed to a more accepted style
 
-Once you have created the refactor files 
+Once you have created the refactor files
 
 * run an additional check to ensure they will compile
 * if there are existing tests ensure the refactored file will pass existing tests - changes to the test file should be additive - never remove a test unless it is completely outdated by the refactor
@@ -56,51 +56,60 @@ can we also look at changing the comments to be suitable for someone coming to t
 
 ## Current Task
 
-We're building a microservice architecture - everything works so at this stage we're refining, simplifying and improving the code. 
+We're building a microservice architecture - everything works so at this stage we're refining, simplifying and improving the code.
 
 ### Context
 At the moment we're interested in improving the use of the golang "context" package.
-So we want to control how long contexts last, what they are used for and in particular we need to keep good control over 
+So we want to control how long contexts last, what they are used for and in particular we need to keep good control over
 the use of security in context.
 
 ### Security
-Each service will be associated with a service account. The permissions of this service account must propagate down to 
+Each service will be associated with a service account. The permissions of this service account must propagate down to
 the types and funcs used.
 
 ## Messaging
-We are going to start with our messaging package. So anytime a pubsub resource is created or accessed the security element 
+We are going to start with our messaging package. So anytime a pubsub resource is created or accessed the security element
 attached to the context must come from the service that uses it.
 
 ## Livecycle
-We want to avoid things hanging for too long - mostly on startup - we want resilience but we also want to fail fast if 
+We want to avoid things hanging for too long - mostly on startup - we want resilience but we also want to fail fast if
 something is wrong
 
 ## General cleanup
-We want to reuse patterns where possible. 
+We want to reuse patterns where possible.
 
 * good naming patterns;
 * similar config patterns;
 * ordering of fields in constructors: if we have a func NewStruct(ctx context.Context, cfg pkg.Config) then other NewFoobar() structs should follow the same order: context, config etc
 * try to handle all errors - all critical errors MUST be handled - non critical errors should be logged - there are some non critical errors that we generally ignore like closing a writer if it basically has no effect in the given situation
 
+## Responses
+
+If things go wrong do not spend a lot of time apologising: just say something like "sorry, let's fix that now" and move on.
+We're not interested in blame only solutions
+
+If I become upset, remind me you are just an AI agent tasked with helping me - 
+then we can both refocus on getting the job done without spiraling into despair(!)
+After a few negative comments in a row you can even suggest we should take a break for 20 minutes
+
 ## Procedure
 
 Can you start by looking at these files and giving a general overview and refactor plan
 
-We prefer a pattern of suggested action, agreement, then implementation - 
+We prefer a pattern of suggested action, agreement, then implementation -
 do not just jump into creating new code until the plan for the refactor is agreed
 
-If we are ready we can start refactoring. 
-First give me a list of all the files we expect to be touched in the refactor (including tests)- 
-at the end of any files refactor give me the list again with all the completed refactors indicated. 
+If we are ready we can start refactoring.
+First give me a list of all the files we expect to be touched in the refactor (including tests)-
+at the end of any files refactor give me the list again with all the completed refactors indicated.
 Where appropriate indicate if we need a unit or integration test for the refactored file.
-If the refactor revisits a previously refactored file indicate this and whether the refactor effects tests or other files 
+If the refactor revisits a previously refactored file indicate this and whether the refactor effects tests or other files
 (these will be then be added into our list of touched files)
 
 ## On good outcome
-The initial review should be exactly the same as that for the other packages. 
-Pay particular attention to the use of context. Review NewFunc() parameter order. Document correctly. 
-Use our rigorous test patterns, avoiding sleep, use t.Cleanup. 
+The initial review should be exactly the same as that for the other packages.
+Pay particular attention to the use of context. Review NewFunc() parameter order. Document correctly.
+Use our rigorous test patterns, avoiding sleep, use t.Cleanup.
 
 ## Today's Task
 
