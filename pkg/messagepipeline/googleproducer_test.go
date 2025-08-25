@@ -10,8 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"cloud.google.com/go/pubsub"
-	"cloud.google.com/go/pubsub/pstest"
+	"cloud.google.com/go/pubsub/v2"
+	pb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	"cloud.google.com/go/pubsub/v2/pstest"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -37,14 +38,16 @@ func sanitizedTestName(t *testing.T) string {
 	return sanitized
 }
 
-// setupTestPubsub creates a mock Pub/Sub server, client, topic, and subscription for testing.
-func setupTestPubsub(t *testing.T, projectID, topicID, subID string) (*pubsub.Client, *pubsub.Topic, *pubsub.Subscription) {
+// setupTestPubsub creates a mock Pub/Sub server and a v2 client.
+// REFACTOR: This helper no longer creates topics or subscriptions. It returns the
+// server instance so the test can perform administrative setup.
+func setupTestPubsub(t *testing.T, projectID string) (*pubsub.Client, *pstest.Server) {
 	t.Helper()
 	ctx := context.Background()
 	srv := pstest.NewServer()
 	t.Cleanup(func() { _ = srv.Close() })
 
-	conn, err := grpc.Dial(srv.Addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(srv.Addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
@@ -54,13 +57,7 @@ func setupTestPubsub(t *testing.T, projectID, topicID, subID string) (*pubsub.Cl
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
 
-	topic, err := client.CreateTopic(ctx, topicID)
-	require.NoError(t, err)
-
-	sub, err := client.CreateSubscription(ctx, subID, pubsub.SubscriptionConfig{Topic: topic})
-	require.NoError(t, err)
-
-	return client, topic, sub
+	return client, srv
 }
 
 // =============================================================================
@@ -72,18 +69,28 @@ func TestGooglePubsubProducer_PublishAndStop(t *testing.T) {
 	testCtx, testCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(testCancel)
 
-	// Create unique names for this test run to allow parallel execution.
 	uniqueSuffix := fmt.Sprintf("%s-%d", sanitizedTestName(t), time.Now().UnixNano())
 	projectID := "proj-" + uniqueSuffix
 	topicID := "topic-" + uniqueSuffix
 	subID := "sub-" + uniqueSuffix
 
-	pubsubClient, _, subscription := setupTestPubsub(t, projectID, topicID, subID)
+	pubsubClient, srv := setupTestPubsub(t, projectID)
 
-	producerConfig := messagepipeline.NewGooglePubsubProducerDefaults()
-	producerConfig.TopicID = topicID
+	// REFACTOR: Manually create the topic and subscription on the test server's
+	// GServer, as the v2 client does not have these admin functions.
+	topicName := fmt.Sprintf("projects/%s/topics/%s", projectID, topicID)
+	subName := fmt.Sprintf("projects/%s/subscriptions/%s", projectID, subID)
+	_, err := srv.GServer.CreateTopic(testCtx, &pb.Topic{Name: topicName})
+	require.NoError(t, err)
+	_, err = srv.GServer.CreateSubscription(testCtx, &pb.Subscription{
+		Name:  subName,
+		Topic: topicName,
+	})
+	require.NoError(t, err)
 
-	producer, err := messagepipeline.NewGooglePubsubProducer(testCtx, producerConfig, pubsubClient, zerolog.Nop())
+	producerConfig := messagepipeline.NewGooglePubsubProducerDefaults(topicID)
+
+	producer, err := messagepipeline.NewGooglePubsubProducer(producerConfig, pubsubClient, zerolog.Nop())
 	require.NoError(t, err)
 
 	// --- Act ---
@@ -101,34 +108,32 @@ func TestGooglePubsubProducer_PublishAndStop(t *testing.T) {
 	require.NotEmpty(t, publishedID)
 
 	// --- Assert ---
-	// Receive the message from the subscription to verify it was published correctly.
 	var mu sync.Mutex
 	var receivedMsg *pubsub.Message
 
 	receiveCtx, receiveCancel := context.WithCancel(testCtx)
 	t.Cleanup(receiveCancel)
 
+	subscriber := pubsubClient.Subscriber(subID)
 	go func() {
-		err := subscription.Receive(receiveCtx, func(ctx context.Context, msg *pubsub.Message) {
+		err := subscriber.Receive(receiveCtx, func(ctx context.Context, msg *pubsub.Message) {
 			mu.Lock()
 			receivedMsg = msg
 			mu.Unlock()
 			msg.Ack()
-			receiveCancel() // Stop receiving after the first message.
+			receiveCancel()
 		})
 		if err != nil && !errors.Is(err, context.Canceled) {
 			log.Error().Err(err).Msg("Receive error")
 		}
 	}()
 
-	// Wait for the receiver to get the message.
 	require.Eventually(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return receivedMsg != nil
 	}, 5*time.Second, 50*time.Millisecond, "Did not receive message from subscription")
 
-	// Unmarshal the received data and compare it to the original.
 	var receivedData messagepipeline.MessageData
 	err = json.Unmarshal(receivedMsg.Data, &receivedData)
 	require.NoError(t, err)

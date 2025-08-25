@@ -8,18 +8,20 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"testing"
 	"time"
 
-	"cloud.google.com/go/pubsub"
+	"cloud.google.com/go/pubsub/v2"
+	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"cloud.google.com/go/storage"
-	"google.golang.org/api/iterator"
-
+	"github.com/google/uuid"
 	"github.com/illmade-knight/go-dataflow/pkg/icestore"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-test/emulators"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/api/iterator"
 )
 
 // --- Test-Specific Data Structures ---
@@ -35,15 +37,39 @@ type PublishedMessage struct {
 	Location    string
 }
 
+// createPubsubResources is a test helper that encapsulates the administrative
+// task of creating and tearing down the Pub/Sub topic and subscription.
+func createPubsubResources(t *testing.T, ctx context.Context, client *pubsub.Client, projectID, topicID, subID string) {
+	t.Helper()
+	topicAdmin := client.TopicAdminClient
+	subAdmin := client.SubscriptionAdminClient
+
+	topicName := fmt.Sprintf("projects/%s/topics/%s", projectID, topicID)
+	_, err := topicAdmin.CreateTopic(ctx, &pubsubpb.Topic{Name: topicName})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = topicAdmin.DeleteTopic(context.Background(), &pubsubpb.DeleteTopicRequest{Topic: topicName})
+	})
+
+	subName := fmt.Sprintf("projects/%s/subscriptions/%s", projectID, subID)
+	_, err = subAdmin.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name:  subName,
+		Topic: topicName,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = subAdmin.DeleteSubscription(context.Background(), &pubsubpb.DeleteSubscriptionRequest{Subscription: subName})
+	})
+}
+
 // --- Table-Driven Test Main ---
 func TestIceStorageService_Integration(t *testing.T) {
-
-	const (
-		testProjectID      = "icestore-test-project"
-		testTopicID        = "icestore-test-topic"
-		testSubscriptionID = "icestore-test-sub"
-		testBucketName     = "icestore-test-bucket"
-	)
+	const testProjectID = "icestore-test-project"
+	// REFACTOR: Use unique names for test resources.
+	runID := uuid.NewString()
+	testTopicID := "icestore-test-topic-" + runID
+	testSubscriptionID := "icestore-test-sub-" + runID
+	testBucketName := "icestore-test-bucket-" + runID
 
 	// --- One-time Setup for Emulators ---
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -51,7 +77,8 @@ func TestIceStorageService_Integration(t *testing.T) {
 
 	logger := zerolog.New(os.Stderr).Level(zerolog.InfoLevel)
 
-	pubsubConfig := emulators.GetDefaultPubsubConfig(testProjectID, map[string]string{testTopicID: testSubscriptionID})
+	// REFACTOR: Use the updated GetDefaultPubsubConfig.
+	pubsubConfig := emulators.GetDefaultPubsubConfig(testProjectID)
 	pubsubConnection := emulators.SetupPubsubEmulator(t, ctx, pubsubConfig)
 
 	gcsConfig := emulators.GetDefaultGCSConfig(testProjectID, testBucketName)
@@ -104,10 +131,16 @@ func TestIceStorageService_Integration(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = psClient.Close() })
 
+			// REFACTOR: Sanitize the test case name to create a valid resource ID.
+			reg := regexp.MustCompile(`[^a-zA-Z0-9-]+`)
+			sanitizedName := reg.ReplaceAllString(tc.name, "-")
+			runTopicID := testTopicID + "-" + sanitizedName
+			runSubID := testSubscriptionID + "-" + sanitizedName
+			createPubsubResources(t, testCtx, psClient, testProjectID, runTopicID, runSubID)
+
 			// --- Initialize Service Components ---
-			consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
-			consumerCfg.SubscriptionID = testSubscriptionID
-			consumer, err := messagepipeline.NewGooglePubsubConsumer(testCtx, consumerCfg, psClient, logger)
+			consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(runSubID)
+			consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, logger)
 			require.NoError(t, err)
 
 			serviceCfg := icestore.IceStorageServiceConfig{
@@ -142,7 +175,7 @@ func TestIceStorageService_Integration(t *testing.T) {
 			})
 
 			// --- Publish Test Messages ---
-			publishMessages(t, testCtx, psClient, testTopicID, tc.messagesToPublish)
+			publishMessages(t, testCtx, psClient, runTopicID, tc.messagesToPublish)
 
 			// --- Verification ---
 			require.Eventually(t, func() bool {
@@ -158,13 +191,14 @@ func TestIceStorageService_Integration(t *testing.T) {
 }
 
 // publishMessages is a helper to publish a slice of messages for a test case.
+// REFACTOR: Updated to use the v2 publisher.
 func publishMessages(t *testing.T, ctx context.Context, client *pubsub.Client, testTopicID string, messages []PublishedMessage) {
 	t.Helper()
 	if len(messages) == 0 {
 		return
 	}
-	topic := client.Topic(testTopicID)
-	defer topic.Stop()
+	publisher := client.Publisher(testTopicID)
+	defer publisher.Stop()
 
 	for _, msg := range messages {
 		payloadBytes, _ := json.Marshal(msg.Payload)
@@ -174,7 +208,7 @@ func publishMessages(t *testing.T, ctx context.Context, client *pubsub.Client, t
 			"test_publish_time": msg.PublishTime.Format(time.RFC3339),
 		}
 
-		pubResult := topic.Publish(ctx, &pubsub.Message{
+		pubResult := publisher.Publish(ctx, &pubsub.Message{
 			Data:       payloadBytes,
 			Attributes: attributes,
 		})

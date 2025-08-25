@@ -44,7 +44,7 @@ Here is an example demonstrating how to set up a pipeline that consumes messages
 You need a struct for your BigQuery table schema and another for the incoming message format if it's structured (e.g., JSON).
 
 Go
-````go
+````
 // MonitorReadings represents the structure of the data written to BigQuery.  
 type MonitorReadings struct {  
     DE       string  
@@ -64,7 +64,7 @@ type TestUpstreamMessage struct {
 
 This function is responsible for converting a raw message into your typed Go struct.
 
-````go
+````
 // ConsumedMessageTransformer implements the MessageTransformer logic.  
 func ConsumedMessageTransformer(_ context.Context, msg *messagepipeline.Message) (*MonitorReadings, bool, error) {  
 	var upstreamMsg TestUpstreamMessage  

@@ -2,18 +2,17 @@ package messagepipeline
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"time"
 
-	"cloud.google.com/go/pubsub"
+	"cloud.google.com/go/pubsub/v2"
 	"github.com/rs/zerolog"
 )
 
 // GoogleSimplePublisherConfig holds configuration for the GoogleSimplePublisher.
+// REFACTOR: Removed TopicExistsTimeout as the check is no longer performed.
 type GoogleSimplePublisherConfig struct {
 	TopicID string
-	// TopicExistsTimeout is the timeout for the initial check to see if the topic exists.
-	TopicExistsTimeout time.Duration
 	// PublishResultTimeout is the timeout for asynchronously waiting for a publish result
 	// in the background. This is detached from the caller's context.
 	PublishResultTimeout time.Duration
@@ -23,7 +22,6 @@ type GoogleSimplePublisherConfig struct {
 func NewGoogleSimplePublisherDefaults(topicID string) *GoogleSimplePublisherConfig {
 	return &GoogleSimplePublisherConfig{
 		TopicID:              topicID,
-		TopicExistsTimeout:   20 * time.Second,
 		PublishResultTimeout: 30 * time.Second,
 	}
 }
@@ -40,48 +38,38 @@ type SimplePublisher interface {
 // GoogleSimplePublisher implements a direct-to-Pub/Sub publisher. It is designed
 // for scenarios where messages should be sent quickly without blocking the caller
 // to wait for the server acknowledgment.
+// REFACTOR: This struct now holds a v2 Publisher.
 type GoogleSimplePublisher struct {
-	topic  *pubsub.Topic
-	logger zerolog.Logger
-	cfg    *GoogleSimplePublisherConfig
+	publisher *pubsub.Publisher
+	logger    zerolog.Logger
+	cfg       *GoogleSimplePublisherConfig
 }
 
 // NewGoogleSimplePublisher creates a new simple, non-batching publisher.
-// The provided context is used to verify that the target topic exists before returning.
+// REFACTOR: Updated to use the v2 pubsub.Publisher and removed the existence check.
 func NewGoogleSimplePublisher(
-	ctx context.Context,
 	cfg *GoogleSimplePublisherConfig,
 	client *pubsub.Client,
 	logger zerolog.Logger,
 ) (SimplePublisher, error) {
 	if client == nil {
-		return nil, fmt.Errorf("pubsub client cannot be nil")
+		return nil, errors.New("pubsub client cannot be nil")
 	}
-	topic := client.Topic(cfg.TopicID)
-
-	// Verify the topic exists, respecting the context's deadline.
-	existsCtx, cancel := context.WithTimeout(ctx, cfg.TopicExistsTimeout)
-	defer cancel()
-	exists, err := topic.Exists(existsCtx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check for topic %s: %w", cfg.TopicID, err)
-	}
-	if !exists {
-		return nil, fmt.Errorf("pubsub topic %s does not exist", cfg.TopicID)
-	}
+	publisher := client.Publisher(cfg.TopicID)
 
 	return &GoogleSimplePublisher{
-		topic:  topic,
-		cfg:    cfg,
-		logger: logger.With().Str("component", "GoogleSimplePublisher").Str("topic_id", cfg.TopicID).Logger(),
+		publisher: publisher,
+		cfg:       cfg,
+		logger:    logger.With().Str("component", "GoogleSimplePublisher").Str("topic_id", cfg.TopicID).Logger(),
 	}, nil
 }
 
 // Publish sends a single message to Pub/Sub. It returns immediately after queueing
 // the message. The final result of the publish operation (success or failure) is
 // handled asynchronously in a background goroutine, where it is logged.
+// REFACTOR: Updated to use the v2 publisher.
 func (p *GoogleSimplePublisher) Publish(ctx context.Context, payload []byte, attributes map[string]string) error {
-	result := p.topic.Publish(ctx, &pubsub.Message{
+	result := p.publisher.Publish(ctx, &pubsub.Message{
 		Data:       payload,
 		Attributes: attributes,
 	})
@@ -105,16 +93,17 @@ func (p *GoogleSimplePublisher) Publish(ctx context.Context, payload []byte, att
 
 // Stop flushes any pending messages for the topic.
 // It respects the provided context for timeout/cancellation.
+// REFACTOR: Updated to call Stop on the v2 publisher.
 func (p *GoogleSimplePublisher) Stop(ctx context.Context) error {
-	if p.topic == nil {
+	if p.publisher == nil {
 		return nil
 	}
 
-	// topic.Stop() is blocking, so we wrap it to respect the context timeout.
+	// publisher.Stop() is blocking, so we wrap it to respect the context timeout.
 	stopDone := make(chan struct{})
 	go func() {
 		p.logger.Info().Msg("Flushing messages and stopping simple publisher topic...")
-		p.topic.Stop()
+		p.publisher.Stop()
 		p.logger.Info().Msg("Simple publisher topic stopped.")
 		close(stopDone)
 	}()

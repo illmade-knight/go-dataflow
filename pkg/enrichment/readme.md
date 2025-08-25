@@ -35,7 +35,7 @@ The enrichment process has specific error handling behavior:
 
 This example demonstrates how to set up an EnrichmentService that fetches device metadata and adds it to an incoming message.
 
-````go
+````
 
 package main
 

@@ -62,7 +62,7 @@ The package includes ready-to-use components for Google Cloud Pub/Sub.
 
 This example sets up a service that consumes messages, transforms them, and processes them one by one.
 
-````go
+````
 package main
 
 import (  
@@ -135,7 +135,7 @@ This example is similar but collects messages into batches before processing.
 
 // ... (setup and component creation is similar to the streaming example)
 
-````go
+````
 // Batch Processor  
 batchProcessor := func(ctx context.Context, batch []messagepipeline.ProcessableItem[MyPayload]) error {  
     logger.Info().Int("batch_size", len(batch)).Msg("Processing batch")

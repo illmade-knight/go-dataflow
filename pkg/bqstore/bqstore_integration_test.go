@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"cloud.google.com/go/bigquery"
-	"cloud.google.com/go/pubsub"
-
+	"cloud.google.com/go/pubsub/v2"
+	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	"github.com/google/uuid"
 	"github.com/illmade-knight/go-dataflow/pkg/bqstore"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-test/emulators"
-
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 )
@@ -45,22 +45,47 @@ func ConsumedMessageTransformer(_ context.Context, msg *messagepipeline.Message)
 	return upstreamMsg.Payload, false, nil // Success.
 }
 
-func TestBigQueryService_Integration_FullFlow(t *testing.T) {
+// createPubsubResources is a test helper that encapsulates the administrative
+// task of creating and tearing down the Pub/Sub topic and subscription.
+func createPubsubResources(t *testing.T, ctx context.Context, client *pubsub.Client, projectID, topicID, subID string) {
+	t.Helper()
+	topicAdmin := client.TopicAdminClient
+	subAdmin := client.SubscriptionAdminClient
 
-	const (
-		testProjectID           = "test-garden-project"
-		testInputTopicID        = "garden-monitor-topic"
-		testInputSubscriptionID = "garden-monitor-sub"
-		testBigQueryDatasetID   = "garden_data_dataset"
-		testBigQueryTableID     = "monitor_payloads"
-		testDeviceUID           = "GARDEN_MONITOR_001"
-	)
+	topicName := fmt.Sprintf("projects/%s/topics/%s", projectID, topicID)
+	_, err := topicAdmin.CreateTopic(ctx, &pubsubpb.Topic{Name: topicName})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = topicAdmin.DeleteTopic(context.Background(), &pubsubpb.DeleteTopicRequest{Topic: topicName})
+	})
+
+	subName := fmt.Sprintf("projects/%s/subscriptions/%s", projectID, subID)
+	_, err = subAdmin.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name:  subName,
+		Topic: topicName,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = subAdmin.DeleteSubscription(context.Background(), &pubsubpb.DeleteSubscriptionRequest{Subscription: subName})
+	})
+}
+
+func TestBigQueryService_Integration_FullFlow(t *testing.T) {
+	const testProjectID = "test-garden-project"
+	// REFACTOR: Use unique names for test resources.
+	runID := uuid.NewString()
+	testInputTopicID := "garden-monitor-topic-" + runID
+	testInputSubscriptionID := "garden-monitor-sub-" + runID
+	testBigQueryDatasetID := "garden_data_dataset"
+	testBigQueryTableID := "monitor_payloads"
+	const testDeviceUID = "GARDEN_MONITOR_001"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 
 	// --- Emulator Setup ---
-	pubsubConfig := emulators.GetDefaultPubsubConfig(testProjectID, map[string]string{testInputTopicID: testInputSubscriptionID})
+	// REFACTOR: Use the updated GetDefaultPubsubConfig.
+	pubsubConfig := emulators.GetDefaultPubsubConfig(testProjectID)
 	connection := emulators.SetupPubsubEmulator(t, ctx, pubsubConfig)
 
 	bigquerySchema := map[string]interface{}{testBigQueryTableID: MonitorReadings{}}
@@ -70,18 +95,21 @@ func TestBigQueryService_Integration_FullFlow(t *testing.T) {
 	// --- Configuration and Client Setup ---
 	logger := zerolog.New(io.Discard)
 
+	// REFACTOR: Use v2 pubsub client.
 	psClient, err := pubsub.NewClient(ctx, testProjectID, connection.ClientOptions...)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = psClient.Close() })
+
+	// REFACTOR: Create test-specific pubsub resources.
+	createPubsubResources(t, ctx, psClient, testProjectID, testInputTopicID, testInputSubscriptionID)
 
 	bqClient, err := bigquery.NewClient(ctx, testProjectID, bigqueryConnection.ClientOptions...)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = bqClient.Close() })
 
 	// --- Initialize Pipeline Components ---
-	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
-	consumerCfg.SubscriptionID = testInputSubscriptionID
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, psClient, logger)
+	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(testInputSubscriptionID)
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, logger)
 	require.NoError(t, err)
 
 	bqInserterCfg := &bqstore.BigQueryDatasetConfig{DatasetID: testBigQueryDatasetID, TableID: testBigQueryTableID}
@@ -110,13 +138,14 @@ func TestBigQueryService_Integration_FullFlow(t *testing.T) {
 
 	// --- Publish Test Messages ---
 	const messageCount = 7
-	inputTopic := psClient.Topic(testInputTopicID)
-	t.Cleanup(func() { inputTopic.Stop() })
+	// REFACTOR: Use the v2 publisher.
+	publisher := psClient.Publisher(testInputTopicID)
+	t.Cleanup(func() { publisher.Stop() })
 
 	for i := 0; i < messageCount; i++ {
 		msgDataBytes, err := json.Marshal(TestUpstreamMessage{Payload: &MonitorReadings{DE: testDeviceUID, Sequence: 100 + i}})
 		require.NoError(t, err)
-		pubResult := inputTopic.Publish(ctx, &pubsub.Message{Data: msgDataBytes})
+		pubResult := publisher.Publish(ctx, &pubsub.Message{Data: msgDataBytes})
 		_, err = pubResult.Get(ctx)
 		require.NoError(t, err)
 	}

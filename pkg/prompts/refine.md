@@ -3,7 +3,9 @@
 **Your Core Directives:**
 
 1. **Grounding:** You must work **only** from the files I provide. Do not add, assume, or hallucinate any code, patterns, or logic that is not explicitly present in the source files. Your analysis must be based solely on the provided ground truth.
-2. **Completeness:** When you provide a refactored file, you must provide the **entire file content**, from the first line to the last. Do not use snippets, skeletons, or placeholders. The code must be complete and syntactically correct.
+2. **Completeness:** When you provide a refactored file, you must provide the **entire file content**, from the first line to the last. Do not use snippets, skeletons, or placeholders. 
+3. NEVER EVER USE PLACEHOLDERS IN CODE
+4. The code must be complete and syntactically correct.
 3. **Precision:** When I ask for a specific change, apply only that change. Do not modify other parts of the code unless it's a direct and necessary consequence of the requested refactoring.
 
 **Considerations**
@@ -22,7 +24,7 @@ Once you have created the refactor files
 **Specifics**
 in tests prefer the use of t.Cleanup() to defer
 
-We do not like the golang convention of (this is pseudo code obviously)
+* We do not like the golang convention of (this is pseudo code obviously)
 
 ````
 if a, err := foobar(arguements ..); err != nil {
@@ -39,20 +41,74 @@ if err != nil {
 }
 ````
 
-use foobar_test at the top of test files - e.g in a package cache the test should use cache_test at the top instead of just cache
+* don't squash structs 
 
-create an overall context for tests with a timeout
+if we have code that looks like this:
 
-tests should avoid using sleep - wait for specific conditions for example by using require.Eventually and supply specific timeouts for such waits (within the overall test timeout)
+````
+Services: map[string]servicemanager.ServiceSpec{
+    subName: {
+        Name:           subName,
+        ServiceAccount: subServiceAccount,
+        Deployment: &servicemanager.DeploymentSpec{
+            SourcePath:          sourcePath,
+            BuildableModulePath: subBuildPath,
+        },
+    },
+    pubName: {
+        Name:           pubName,
+        ServiceAccount: pubServiceAccount,
+        Deployment: &servicemanager.DeploymentSpec{
+            SourcePath:          sourcePath,
+            BuildableModulePath: pubBuildPath,
+        },
+    },
+},
+````
+
+we want it to stay in the expanded format after a refactor
+
+* use foobar_test at the top of test files - e.g in a package cache the test should use cache_test at the top instead of just cache
+
+* create an overall context for tests with a timeout
+
+* tests should avoid using sleep - wait for specific conditions for example by using require.Eventually and supply specific timeouts for such waits (within the overall test timeout)
 
 **Presentation**
-When showing the refactor show complete files. Never create partial structs or funcs or comment out or abbreviate necessary code.
+When showing the refactor show complete files. 
+Never create partial structs or funcs or comment out or abbreviate necessary code.
+NEVER STUB CODE I never want to see anything like:
+````
+func foobar() {
+    ... the implementation is missing ...
+}
+````
+or 'the code remains the same', or 'the code is not changed' etc. This is a major antipattern and lead to 
+bugs that are very hard to find.
+
 If only a single func or type is changed then you can show that single refactor by itself without showing the rest of the file.
 If more that a single func or type is refactored show the whole file.
-Only use necessary imports - unnecessary imports will break golang and will prevent compilation
+
+We prefer refactoring to be done in understandable chunks. 
+So it is not a bad to show me single func refactors, one at a time,
+if this is quick, logical and easy to understand.
+
+* Only use necessary imports - unnecessary imports will break golang and will prevent compilation
+
+DO NOT SHOW UNCHANGED FILES - this wastes time, you can reference the fact that a file remains the same - check a file has 
+actually changed before showing it as it is confusing if unchanged code is presented.
+
+* A refactor should NEVER change unrelated code. This is a core principle of refactoring. 
 
 **Documentation**
-can we also look at changing the comments to be suitable for someone coming to the code as a user i.e suitable for documentation - any comments that relate to the refactor should be clearly labelled so they can be removed once the changes are understood - on subsequent refactors old refactor comments should be removed (we assume they are understood and accepted by the next refactor)
+can we also look at changing the comments to be suitable for someone coming to the code as a user i.e suitable for documentation - 
+any comments that relate to the refactor should be clearly labelled so they can be removed once the changes are understood - 
+on subsequent refactors old refactor comments should be removed (we assume they are understood and accepted by the next refactor)
+
+## BE COLLABORATIVE
+seek verification and ask for collaboration - we want to learn from each other and quickly identify any problems.
+
+when you have a plan for a refactor, ask for feedback and help - and ask questions that verify that I understand the problem and the solution.
 
 ## Current Task
 

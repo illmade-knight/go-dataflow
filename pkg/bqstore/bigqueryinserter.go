@@ -1,11 +1,12 @@
 package bqstore
 
 import (
-	"cloud.google.com/go/bigquery"
 	"context"
 	"errors"
 	"fmt"
 	"strings"
+
+	"cloud.google.com/go/bigquery"
 
 	"github.com/rs/zerolog"
 	"google.golang.org/api/option"

@@ -8,7 +8,7 @@ The entire framework is built on a single, simple interface and uses Go generics
 
 The foundation of this package is the Fetcher interface. It defines a simple contract for any component that can retrieve data.
 
-````go
+````
 type Fetcher[K comparable, V any] interface {
 	Fetch(ctx context.Context, key K) (V, error)
 	io.Closer  
@@ -58,7 +58,7 @@ This ensures that subsequent requests for the same data will be served from the 
 
 // Example of creating a chained cache for a UserProfile struct
 
-````go
+````
 type UserProfile struct {  
     Name  string `firestore:"name"`  
     Email string `firestore:"email"`  
