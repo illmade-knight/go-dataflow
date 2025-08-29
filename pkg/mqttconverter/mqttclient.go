@@ -1,29 +1,32 @@
 package mqttconverter
 
 import (
-	"github.com/rs/zerolog/log"
 	"os"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // MQTTClientConfig holds configuration for the Paho MQTT client.
 type MQTTClientConfig struct {
-	BrokerURL          string        // e.g., "tls://mqtt.example.com:8883"
-	Topic              string        // e.g., "devices/+/up"
-	ClientIDPrefix     string        // A prefix for the client MessageID, a unique suffix will be added.
-	Username           string        // MQTT username (from env)
-	Password           string        // MQTT password (from env)
-	KeepAlive          time.Duration // MQTT KeepAlive interval
-	ConnectTimeout     time.Duration // Timeout for establishing connection
-	ReconnectWaitMin   time.Duration // Minimum wait time before attempting reconnect
-	ReconnectWaitMax   time.Duration // Maximum wait time before attempting reconnect
-	CACertFile         string        // Optional: Path to CA certificate file for custom CA
-	ClientCertFile     string        // Optional: Path to client certificate file for mTLS
-	ClientKeyFile      string        // Optional: Path to client key file for mTLS
-	InsecureSkipVerify bool          // Optional: Skip TLS verification (NOT recommended for production)
+	BrokerURL string // e.g., "tls://mqtt.example.com:8883"
+	// Topic has been replaced by TopicMappings to support multiple subscriptions.
+	TopicMappings      []TopicMapping // Defines all topic-to-route mappings for this consumer.
+	ClientIDPrefix     string         // A prefix for the client MessageID, a unique suffix will be added.
+	Username           string         // MQTT username (from env)
+	Password           string         // MQTT password (from env)
+	KeepAlive          time.Duration  // MQTT KeepAlive interval
+	ConnectTimeout     time.Duration  // Timeout for establishing connection
+	ReconnectWaitMin   time.Duration  // Minimum wait time before attempting reconnect
+	ReconnectWaitMax   time.Duration  // Maximum wait time before attempting reconnect
+	CACertFile         string         // Optional: Path to CA certificate file for custom CA
+	ClientCertFile     string         // Optional: Path to client certificate file for mTLS
+	ClientKeyFile      string         // Optional: Path to client key file for mTLS
+	InsecureSkipVerify bool           // Optional: Skip TLS verification (NOT recommended for production)
 }
 
 // LoadMQTTClientConfigFromEnv loads MQTT operational configuration from environment variables.
+// Note: TopicMappings are not loaded from the environment and must be configured programmatically.
 func LoadMQTTClientConfigFromEnv() *MQTTClientConfig {
 
 	cfg := &MQTTClientConfig{

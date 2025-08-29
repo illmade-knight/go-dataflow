@@ -28,7 +28,8 @@ type MqttConsumer struct {
 }
 
 // ToPipelineMessage transforms a Paho MQTT message into the canonical messagepipeline.Message.
-func ToPipelineMessage(msg mqtt.Message) messagepipeline.Message {
+// REFACTOR: Added routeName parameter to inject into attributes.
+func ToPipelineMessage(msg mqtt.Message, routeName string) messagepipeline.Message {
 	payloadCopy := make([]byte, len(msg.Payload()))
 	copy(payloadCopy, msg.Payload())
 
@@ -38,9 +39,12 @@ func ToPipelineMessage(msg mqtt.Message) messagepipeline.Message {
 			Payload:     payloadCopy,
 			PublishTime: time.Now().UTC(),
 		},
-		Attributes: map[string]string{"mqtt_topic": msg.Topic()},
-		Ack:        func() {},
-		Nack:       func() {},
+		Attributes: map[string]string{
+			"mqtt_topic": msg.Topic(),
+			"route_name": routeName, // Add the logical route name for downstream processing.
+		},
+		Ack:  func() {},
+		Nack: func() {},
 	}
 }
 
@@ -49,8 +53,9 @@ func NewMqttConsumer(cfg *MQTTClientConfig, logger zerolog.Logger, bufferSize in
 	if cfg.BrokerURL == "" {
 		return nil, fmt.Errorf("MQTT broker URL is required")
 	}
-	if cfg.Topic == "" {
-		return nil, fmt.Errorf("MQTT topic is required")
+	// REFACTOR: Validate TopicMappings instead of a single Topic.
+	if len(cfg.TopicMappings) == 0 {
+		return nil, fmt.Errorf("at least one MQTT TopicMapping is required")
 	}
 
 	return &MqttConsumer{
@@ -97,13 +102,18 @@ func (c *MqttConsumer) Stop(ctx context.Context) error {
 
 		c.logger.Info().Msg("Stopping MqttConsumer...")
 		if c.pahoClient != nil && c.pahoClient.IsConnected() {
-			c.logger.Info().Str("topic", c.mqttCfg.Topic).Msg("Unsubscribing from MQTT topic.")
-			token := c.pahoClient.Unsubscribe(c.mqttCfg.Topic)
+			// REFACTOR: Unsubscribe from all configured topics.
+			topics := make([]string, len(c.mqttCfg.TopicMappings))
+			for i, mapping := range c.mqttCfg.TopicMappings {
+				topics[i] = mapping.Topic
+			}
+			c.logger.Info().Strs("topics", topics).Msg("Unsubscribing from MQTT topics.")
+			token := c.pahoClient.Unsubscribe(topics...)
 
 			if !token.WaitTimeout(getTimeoutFromContext(ctx, 5*time.Second)) {
 				c.logger.Warn().Msg("Timed out waiting for MQTT unsubscribe confirmation.")
 			} else if err := token.Error(); err != nil {
-				c.logger.Warn().Err(err).Msg("Failed to unsubscribe from MQTT topic.")
+				c.logger.Warn().Err(err).Msg("Failed to unsubscribe from MQTT topics.")
 			}
 
 			c.pahoClient.Disconnect(500)
@@ -127,30 +137,33 @@ func (c *MqttConsumer) IsConnected() bool {
 	return c.pahoClient != nil && c.pahoClient.IsConnected()
 }
 
-// handleIncomingMessage is the Paho callback that converts and forwards messages.
-func (c *MqttConsumer) handleIncomingMessage(client mqtt.Client, msg mqtt.Message) {
-	c.logger.Debug().Str("topic", msg.Topic()).Int("payload_size", len(msg.Payload())).Msg("Received MQTT message")
+// REFACTOR: This function is no longer a method on the consumer struct.
+// It is now used as a template for the closure in createMqttOptions.
+func (c *MqttConsumer) newMessageHandler(routeName string) mqtt.MessageHandler {
+	return func(client mqtt.Client, msg mqtt.Message) {
+		c.logger.Debug().Str("topic", msg.Topic()).Int("payload_size", len(msg.Payload())).Msg("Received MQTT message")
 
-	c.mu.RLock()
-	if c.isStopped {
+		c.mu.RLock()
+		if c.isStopped {
+			c.mu.RUnlock()
+			c.logger.Warn().Str("topic", msg.Topic()).Msg("Consumer is stopped, dropping MQTT message.")
+			return
+		}
 		c.mu.RUnlock()
-		c.logger.Warn().Str("topic", msg.Topic()).Msg("Consumer is stopped, dropping MQTT message.")
-		return
-	}
-	c.mu.RUnlock()
 
-	consumedMsg := ToPipelineMessage(msg)
+		// Pass the routeName to be included in the message attributes.
+		consumedMsg := ToPipelineMessage(msg, routeName)
 
-	select {
-	case c.outputChan <- consumedMsg:
-		// Message successfully sent to the pipeline
-	default:
-		c.logger.Warn().Int("channel_capacity", cap(c.outputChan)).Msg("Output channel is full. Dropping MQTT message.")
+		select {
+		case c.outputChan <- consumedMsg:
+			// Message successfully sent to the pipeline
+		default:
+			c.logger.Warn().Int("channel_capacity", cap(c.outputChan)).Msg("Output channel is full. Dropping MQTT message.")
+		}
 	}
 }
 
-// EDITED: The OnConnect handler now contains all subscription logic.
-// The message handler is passed directly to the Subscribe call for clarity.
+// REFACTOR: The OnConnect handler now subscribes to multiple topics.
 func (c *MqttConsumer) createMqttOptions(ctx context.Context) *mqtt.ClientOptions {
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(c.mqttCfg.BrokerURL)
@@ -165,20 +178,24 @@ func (c *MqttConsumer) createMqttOptions(ctx context.Context) *mqtt.ClientOption
 	opts.SetOrderMatters(false)
 
 	opts.SetOnConnectHandler(func(client mqtt.Client) {
-		c.logger.Info().Str("broker", c.mqttCfg.BrokerURL).Msg("Paho client connected to MQTT broker. Attempting to subscribe.")
-		// The message handler is now passed directly to the Subscribe function.
-		token := client.Subscribe(c.mqttCfg.Topic, 1, c.handleIncomingMessage)
+		c.logger.Info().Str("broker", c.mqttCfg.BrokerURL).Msg("Paho client connected to MQTT broker. Subscribing to topics.")
 
-		// This goroutine waits for the subscription to be acknowledged.
-		go func() {
-			if !token.WaitTimeout(10 * time.Second) {
-				c.logger.Error().Str("topic", c.mqttCfg.Topic).Msg("Timed out waiting for MQTT subscribe confirmation.")
-			} else if err := token.Error(); err != nil {
-				c.logger.Error().Err(err).Str("topic", c.mqttCfg.Topic).Msg("Failed to subscribe to MQTT topic.")
-			} else {
-				c.logger.Info().Str("topic", c.mqttCfg.Topic).Msg("Successfully subscribed to MQTT topic.")
-			}
-		}()
+		// Iterate over all configured topic mappings and subscribe.
+		for _, mapping := range c.mqttCfg.TopicMappings {
+			// Create a closure that captures the current mapping's variables.
+			handler := c.newMessageHandler(mapping.Name)
+
+			token := client.Subscribe(mapping.Topic, mapping.QoS, handler)
+			go func(topic, routeName string) {
+				if !token.WaitTimeout(10 * time.Second) {
+					c.logger.Error().Str("topic", topic).Str("route", routeName).Msg("Timed out waiting for MQTT subscribe confirmation.")
+				} else if err := token.Error(); err != nil {
+					c.logger.Error().Err(err).Str("topic", topic).Str("route", routeName).Msg("Failed to subscribe to MQTT topic.")
+				} else {
+					c.logger.Info().Str("topic", topic).Str("route", routeName).Msg("Successfully subscribed to MQTT topic.")
+				}
+			}(mapping.Topic, mapping.Name) // Pass topic and name to goroutine to avoid closure issues.
+		}
 	})
 	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
 		c.logger.Error().Err(err).Msg("Paho client lost MQTT connection. Will attempt to reconnect.")

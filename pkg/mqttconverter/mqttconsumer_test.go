@@ -34,16 +34,19 @@ func TestToPipelineMessage(t *testing.T) {
 		payload:   expectedPayload,
 		messageID: 42,
 	}
+	expectedRouteName := "test-route"
 
 	// Act
-	// Call the pure transformation function directly.
-	receivedMsg := mqttconverter.ToPipelineMessage(pahoMsg)
+	// REFACTOR: Call the updated function with the route name.
+	receivedMsg := mqttconverter.ToPipelineMessage(pahoMsg, expectedRouteName)
 
 	// Assert
 	// No channels, no goroutines, no timeouts needed for this synchronous test.
 	assert.Equal(t, expectedPayload, receivedMsg.Payload)
 	assert.Equal(t, "42", receivedMsg.ID)
 	assert.Equal(t, "devices/test-123/data", receivedMsg.Attributes["mqtt_topic"])
+	// REFACTOR: Add assertion for the new route_name attribute.
+	assert.Equal(t, expectedRouteName, receivedMsg.Attributes["route_name"])
 	// Check that the timestamp is recent.
 	assert.WithinDuration(t, time.Now().UTC(), receivedMsg.PublishTime, 5*time.Second)
 	assert.NotNil(t, receivedMsg.Ack)
