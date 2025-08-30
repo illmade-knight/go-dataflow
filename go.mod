@@ -3,16 +3,16 @@ module github.com/illmade-knight/go-dataflow
 go 1.24.0
 
 require (
-	cloud.google.com/go/bigquery v1.69.0
+	cloud.google.com/go/bigquery v1.70.0
 	cloud.google.com/go/firestore v1.18.0
 	cloud.google.com/go/pubsub/v2 v2.0.0
 	cloud.google.com/go/storage v1.56.1
 	github.com/eclipse/paho.mqtt.golang v1.5.0
 	github.com/google/uuid v1.6.0
-	github.com/illmade-knight/go-test v0.0.6-beta
+	github.com/illmade-knight/go-test v0.0.6
 	github.com/redis/go-redis/v9 v9.12.1
 	github.com/rs/zerolog v1.34.0
-	github.com/stretchr/testify v1.11.0
+	github.com/stretchr/testify v1.11.1
 	google.golang.org/api v0.248.0
 	google.golang.org/grpc v1.75.0
 )
