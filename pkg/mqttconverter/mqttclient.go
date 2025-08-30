@@ -7,27 +7,58 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// MQTTClientConfig holds configuration for the Paho MQTT client.
+// MQTTClientConfig holds all necessary configuration for the Paho MQTT client.
+// It defines connection parameters, security settings, and the topic subscriptions for the consumer.
 type MQTTClientConfig struct {
-	BrokerURL string // e.g., "tls://mqtt.example.com:8883"
-	// Topic has been replaced by TopicMappings to support multiple subscriptions.
-	TopicMappings      []TopicMapping // Defines all topic-to-route mappings for this consumer.
-	ClientIDPrefix     string         // A prefix for the client MessageID, a unique suffix will be added.
-	Username           string         // MQTT username (from env)
-	Password           string         // MQTT password (from env)
-	KeepAlive          time.Duration  // MQTT KeepAlive interval
-	ConnectTimeout     time.Duration  // Timeout for establishing connection
-	ReconnectWaitMin   time.Duration  // Minimum wait time before attempting reconnect
-	ReconnectWaitMax   time.Duration  // Maximum wait time before attempting reconnect
-	CACertFile         string         // Optional: Path to CA certificate file for custom CA
-	ClientCertFile     string         // Optional: Path to client certificate file for mTLS
-	ClientKeyFile      string         // Optional: Path to client key file for mTLS
-	InsecureSkipVerify bool           // Optional: Skip TLS verification (NOT recommended for production)
+	// BrokerURL is the full URL of the MQTT broker to connect to.
+	// Example: "tls://mqtt.example.com:8883"
+	BrokerURL string
+	// TopicMappings defines all the topic-to-route mappings for this consumer.
+	// This allows a single consumer to subscribe to multiple topics and tag messages
+	// with a logical route name for downstream processing.
+	TopicMappings []TopicMapping
+	// ClientIDPrefix is a prefix for the MQTT client ID. A unique suffix is
+	// automatically added to ensure client uniqueness, which is required by most brokers.
+	ClientIDPrefix string
+	// AllowPublicBroker is a security flag that, when set to true, permits the client
+	// to connect to a broker without providing a username and password. This should
+	// only be enabled for trusted, public data sources. Defaults to false.
+	AllowPublicBroker bool
+	// Username for authenticating with the MQTT broker.
+	Username string
+	// Password for authenticating with the MQTT broker.
+	Password string
+	// KeepAlive is the interval at which the client sends keep-alive pings to the broker.
+	KeepAlive time.Duration
+	// ConnectTimeout is the timeout for the initial connection attempt.
+	ConnectTimeout time.Duration
+	// ReconnectWaitMin is the minimum time to wait before attempting to reconnect.
+	ReconnectWaitMin time.Duration
+	// ReconnectWaitMax is the maximum time to wait before attempting to reconnect.
+	ReconnectWaitMax time.Duration
+	// CACertFile is an optional path to a CA certificate file for verifying the broker's certificate.
+	CACertFile string
+	// ClientCertFile is an optional path to a client certificate file for mTLS authentication.
+	ClientCertFile string
+	// ClientKeyFile is an optional path to a client key file for mTLS authentication.
+	ClientKeyFile string
+	// InsecureSkipVerify skips TLS certificate verification.
+	// This is NOT recommended for production environments.
+	InsecureSkipVerify bool
 }
 
-// LoadMQTTClientConfigFromEnv loads MQTT operational configuration from environment variables.
+// Env constants for setting Mqtt settings
+const (
+	MqttSkipVerify            = "MQTT_INSECURE_SKIP_VERIFY"
+	MqttKeepAliveSeconds      = "MQTT_KEEP_ALIVE_SECONDS"
+	MqttConnectTimeoutSeconds = "MQTT_CONNECT_TIMEOUT_SECONDS"
+)
+
+// LoadMQTTClientConfigWithEnv loads MQTT operational configuration from environment variables.
+// It populates settings like timeouts and keep-alive intervals with sensible defaults if
+// the environment variables are not set.
 // Note: TopicMappings are not loaded from the environment and must be configured programmatically.
-func LoadMQTTClientConfigFromEnv() *MQTTClientConfig {
+func LoadMQTTClientConfigWithEnv() *MQTTClientConfig {
 
 	cfg := &MQTTClientConfig{
 		KeepAlive:        60 * time.Second,  // Default
@@ -36,12 +67,12 @@ func LoadMQTTClientConfigFromEnv() *MQTTClientConfig {
 		ReconnectWaitMax: 120 * time.Second, // Default
 		ClientIDPrefix:   "ingestion-service-",
 	}
-	if skipVerify := os.Getenv("MQTT_INSECURE_SKIP_VERIFY"); skipVerify == "true" {
+	if skipVerify := os.Getenv(MqttSkipVerify); skipVerify == "true" {
 		cfg.InsecureSkipVerify = true
 	}
 
 	// Parse durations if set in env, otherwise use defaults
-	if ka := os.Getenv("MQTT_KEEP_ALIVE_SECONDS"); ka != "" {
+	if ka := os.Getenv(MqttKeepAliveSeconds); ka != "" {
 		s, err := time.ParseDuration(ka + "s")
 		if err == nil {
 			cfg.KeepAlive = s
@@ -49,7 +80,7 @@ func LoadMQTTClientConfigFromEnv() *MQTTClientConfig {
 			log.Printf("mqttconverter: error parsing keepAlive seconds: %s, using default", err)
 		}
 	}
-	if ct := os.Getenv("MQTT_CONNECT_TIMEOUT_SECONDS"); ct != "" {
+	if ct := os.Getenv(MqttConnectTimeoutSeconds); ct != "" {
 		s, err := time.ParseDuration(ct + "s")
 		if err == nil {
 			cfg.ConnectTimeout = s

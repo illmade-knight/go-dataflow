@@ -104,7 +104,7 @@ func TestMqttPipeline_Integration(t *testing.T) {
 		return canaryReceived
 	}, 15*time.Second, 250*time.Millisecond, "Canary message was not received, subscription is not ready.")
 
-	mqttCfg := mqttconverter.LoadMQTTClientConfigFromEnv()
+	mqttCfg := mqttconverter.LoadMQTTClientConfigWithEnv()
 	mqttCfg.BrokerURL = mqttConnection.EmulatorAddress
 	mqttCfg.ClientIDPrefix = "ingestion-test-"
 	mqttCfg.TopicMappings = []mqttconverter.TopicMapping{

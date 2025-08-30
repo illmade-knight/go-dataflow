@@ -12,7 +12,7 @@ import (
 
 func TestLoadMQTTClientConfigFromEnv(t *testing.T) {
 	t.Run("Default values are set correctly", func(t *testing.T) {
-		cfg := mqttconverter.LoadMQTTClientConfigFromEnv()
+		cfg := mqttconverter.LoadMQTTClientConfigWithEnv()
 		require.NotNil(t, cfg)
 		assert.Equal(t, 60*time.Second, cfg.KeepAlive)
 		assert.Equal(t, 10*time.Second, cfg.ConnectTimeout)
@@ -24,7 +24,7 @@ func TestLoadMQTTClientConfigFromEnv(t *testing.T) {
 		t.Setenv("MQTT_CONNECT_TIMEOUT_SECONDS", "5")
 		t.Setenv("MQTT_INSECURE_SKIP_VERIFY", "true")
 
-		cfg := mqttconverter.LoadMQTTClientConfigFromEnv()
+		cfg := mqttconverter.LoadMQTTClientConfigWithEnv()
 		require.NotNil(t, cfg)
 
 		assert.Equal(t, 30*time.Second, cfg.KeepAlive)
@@ -36,7 +36,7 @@ func TestLoadMQTTClientConfigFromEnv(t *testing.T) {
 		t.Setenv("MQTT_KEEP_ALIVE_SECONDS", "not-a-number")
 		t.Setenv("MQTT_CONNECT_TIMEOUT_SECONDS", "invalid")
 
-		cfg := mqttconverter.LoadMQTTClientConfigFromEnv()
+		cfg := mqttconverter.LoadMQTTClientConfigWithEnv()
 		require.NotNil(t, cfg)
 		assert.Equal(t, 60*time.Second, cfg.KeepAlive, "KeepAlive should default if env var is invalid")
 		assert.Equal(t, 10*time.Second, cfg.ConnectTimeout, "ConnectTimeout should default if env var is invalid")

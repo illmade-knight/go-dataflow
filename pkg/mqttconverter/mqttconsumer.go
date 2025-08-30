@@ -16,6 +16,8 @@ import (
 )
 
 // MqttConsumer implements the messagepipeline.MessageConsumer interface for an MQTT source.
+// It connects to an MQTT broker, subscribes to one or more topics based on its configuration,
+// and funnels the received messages into a single output channel for downstream processing.
 type MqttConsumer struct {
 	pahoClient mqtt.Client
 	logger     zerolog.Logger
@@ -28,7 +30,8 @@ type MqttConsumer struct {
 }
 
 // ToPipelineMessage transforms a Paho MQTT message into the canonical messagepipeline.Message.
-// REFACTOR: Added routeName parameter to inject into attributes.
+// It copies the message payload and enriches the message with attributes, including the full
+// MQTT topic and the logical routeName defined in the consumer's configuration.
 func ToPipelineMessage(msg mqtt.Message, routeName string) messagepipeline.Message {
 	payloadCopy := make([]byte, len(msg.Payload()))
 	copy(payloadCopy, msg.Payload())
@@ -41,19 +44,19 @@ func ToPipelineMessage(msg mqtt.Message, routeName string) messagepipeline.Messa
 		},
 		Attributes: map[string]string{
 			"mqtt_topic": msg.Topic(),
-			"route_name": routeName, // Add the logical route name for downstream processing.
+			"route_name": routeName, // The logical route name for downstream routing.
 		},
 		Ack:  func() {},
 		Nack: func() {},
 	}
 }
 
-// NewMqttConsumer creates a new MqttConsumer.
+// NewMqttConsumer creates and validates a new MqttConsumer.
+// It requires a valid configuration, a logger, and a specified buffer size for the output channel.
 func NewMqttConsumer(cfg *MQTTClientConfig, logger zerolog.Logger, bufferSize int) (*MqttConsumer, error) {
 	if cfg.BrokerURL == "" {
 		return nil, fmt.Errorf("MQTT broker URL is required")
 	}
-	// REFACTOR: Validate TopicMappings instead of a single Topic.
 	if len(cfg.TopicMappings) == 0 {
 		return nil, fmt.Errorf("at least one MQTT TopicMapping is required")
 	}
@@ -71,8 +74,9 @@ func (c *MqttConsumer) Messages() <-chan messagepipeline.Message {
 	return c.outputChan
 }
 
-// EDITED: The Start method is now simpler and more robust.
-// It relies on the Paho client's auto-reconnect and OnConnect handler for all logic.
+// Start initiates the connection to the MQTT broker in the background. This is a non-blocking
+// call. The underlying Paho client will handle automatic reconnections. A separate goroutine
+// monitors the context for cancellation to ensure a clean shutdown.
 func (c *MqttConsumer) Start(ctx context.Context) error {
 	opts := c.createMqttOptions(ctx)
 	c.pahoClient = mqtt.NewClient(opts)
@@ -93,7 +97,8 @@ func (c *MqttConsumer) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully unsubscribes from the MQTT topic and disconnects the client.
+// Stop gracefully unsubscribes from all configured MQTT topics and disconnects the client.
+// It is safe to call Stop multiple times.
 func (c *MqttConsumer) Stop(ctx context.Context) error {
 	c.stopOnce.Do(func() {
 		c.mu.Lock()
@@ -102,7 +107,6 @@ func (c *MqttConsumer) Stop(ctx context.Context) error {
 
 		c.logger.Info().Msg("Stopping MqttConsumer...")
 		if c.pahoClient != nil && c.pahoClient.IsConnected() {
-			// REFACTOR: Unsubscribe from all configured topics.
 			topics := make([]string, len(c.mqttCfg.TopicMappings))
 			for i, mapping := range c.mqttCfg.TopicMappings {
 				topics[i] = mapping.Topic
@@ -137,8 +141,9 @@ func (c *MqttConsumer) IsConnected() bool {
 	return c.pahoClient != nil && c.pahoClient.IsConnected()
 }
 
-// REFACTOR: This function is no longer a method on the consumer struct.
-// It is now used as a template for the closure in createMqttOptions.
+// newMessageHandler creates a new MQTT message handler closure. The closure captures the
+// logical routeName for a specific subscription, ensuring that messages received are
+// correctly tagged before being sent to the output channel.
 func (c *MqttConsumer) newMessageHandler(routeName string) mqtt.MessageHandler {
 	return func(client mqtt.Client, msg mqtt.Message) {
 		c.logger.Debug().Str("topic", msg.Topic()).Int("payload_size", len(msg.Payload())).Msg("Received MQTT message")
@@ -151,7 +156,6 @@ func (c *MqttConsumer) newMessageHandler(routeName string) mqtt.MessageHandler {
 		}
 		c.mu.RUnlock()
 
-		// Pass the routeName to be included in the message attributes.
 		consumedMsg := ToPipelineMessage(msg, routeName)
 
 		select {
@@ -163,14 +167,20 @@ func (c *MqttConsumer) newMessageHandler(routeName string) mqtt.MessageHandler {
 	}
 }
 
-// REFACTOR: The OnConnect handler now subscribes to multiple topics.
-func (c *MqttConsumer) createMqttOptions(ctx context.Context) *mqtt.ClientOptions {
+// createMqttOptions assembles the Paho client options. Its most important task is setting
+// the OnConnectHandler, which is responsible for subscribing to all topics defined in the
+// configuration whenever a connection to the broker is established.
+func (c *MqttConsumer) createMqttOptions(_ context.Context) *mqtt.ClientOptions {
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(c.mqttCfg.BrokerURL)
 	uniqueSuffix := time.Now().UnixNano() % 1000000
 	opts.SetClientID(fmt.Sprintf("%s-%d", c.mqttCfg.ClientIDPrefix, uniqueSuffix))
-	opts.SetUsername(c.mqttCfg.Username)
-	opts.SetPassword(c.mqttCfg.Password)
+
+	if !c.mqttCfg.AllowPublicBroker {
+		opts.SetUsername(c.mqttCfg.Username)
+		opts.SetPassword(c.mqttCfg.Password)
+	}
+
 	opts.SetKeepAlive(c.mqttCfg.KeepAlive)
 	opts.SetConnectTimeout(c.mqttCfg.ConnectTimeout)
 	opts.SetAutoReconnect(true)
