@@ -108,3 +108,39 @@ This package is designed to be highly testable.
 
 * **Unit Tests**: Each cache implementation has its own unit tests that use a mock Fetcher to verify the fallback logic.
 * **Integration Tests**: The package includes full integration tests for the RedisCache and Firestore fetchers. These tests use the official Google Cloud emulators and Testcontainers to create ephemeral Redis and Firestore instances, allowing for validation against real service behavior without external dependencies.
+
+Go Pipeline Caching Package
+This Go package provides a generic, multi-layered caching framework designed for high-performance data pipeline operations. It supports two primary caching patterns to handle different data access needs.
+
+Pattern 1: Read-Through Caching (Fetcher Interface)
+The first pattern is built on the Fetcher interface, designed for read-through caching. Its purpose is to cache data that has a permanent "source of truth" (like a user profile in a database).
+
+The key design pattern is the fallback mechanism. When a Fetch call results in a cache miss, the cache automatically calls Fetch on its fallback, retrieves the data, stores it for future requests (a "write-back"), and then returns it to the original caller.
+
+Use this pattern for: Data that is read frequently and has a persistent source (e.g., user profiles, device configurations, product details).
+
+Fetcher Implementations
+InMemoryCache: Simple in-memory cache.
+
+InMemoryLRUCache: Production-ready, size-limited in-memory cache with LRU eviction.
+
+RedisCache: Distributed cache backed by Redis.
+
+Firestore: A data fetcher (not a cache) for retrieving documents, typically used as the final "source of truth" in a fallback chain.
+
+Pattern 2: Ephemeral State Management (PresenceCache Interface)
+The second pattern is built on the PresenceCache interface, designed for managing ephemeral, real-time state. This type of data has no persistent source of truth and must be explicitly written and deleted. The most common use case is tracking the online status of users connected via WebSockets.
+
+The interface requires explicit Set, Fetch, and Delete methods.
+
+Use this pattern for: Short-lived, frequently changing state that needs to be shared across service instances (e.g., user online status, session data, distributed locks).
+
+PresenceCache Implementations
+InMemoryPresenceCache: A simple, thread-safe, in-memory implementation suitable for single-instance services or local testing.
+
+RedisPresenceCache: A production-ready, distributed implementation using Redis. This is the recommended choice for multi-instance deployments as it provides a fast, shared view of presence state.
+
+FirestorePresenceCache: A production-ready implementation using Firestore. This is a viable alternative for smaller deployments where running a separate Redis instance might be undesirable.
+
+Usage and Examples
+(Existing documentation for chaining Fetchers remains here...)
