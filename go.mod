@@ -6,15 +6,15 @@ require (
 	cloud.google.com/go/bigquery v1.70.0
 	cloud.google.com/go/firestore v1.18.0
 	cloud.google.com/go/pubsub/v2 v2.0.0
-	cloud.google.com/go/storage v1.56.1
-	github.com/eclipse/paho.mqtt.golang v1.5.0
+	cloud.google.com/go/storage v1.57.0
+	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/google/uuid v1.6.0
 	github.com/illmade-knight/go-test v0.0.6
-	github.com/redis/go-redis/v9 v9.12.1
+	github.com/redis/go-redis/v9 v9.14.0
 	github.com/rs/zerolog v1.34.0
 	github.com/stretchr/testify v1.11.1
-	google.golang.org/api v0.248.0
-	google.golang.org/grpc v1.75.0
+	google.golang.org/api v0.249.0
+	google.golang.org/grpc v1.75.1
 )
 
 require (
@@ -104,20 +104,20 @@ require (
 	go.opentelemetry.io/otel/sdk v1.37.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.37.0 // indirect
 	go.opentelemetry.io/otel/trace v1.37.0 // indirect
-	golang.org/x/crypto v0.41.0 // indirect
+	golang.org/x/crypto v0.42.0 // indirect
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
-	golang.org/x/mod v0.26.0 // indirect
-	golang.org/x/net v0.43.0 // indirect
+	golang.org/x/mod v0.27.0 // indirect
+	golang.org/x/net v0.44.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
-	golang.org/x/sync v0.16.0 // indirect
-	golang.org/x/sys v0.35.0 // indirect
-	golang.org/x/text v0.28.0 // indirect
+	golang.org/x/sync v0.17.0 // indirect
+	golang.org/x/sys v0.36.0 // indirect
+	golang.org/x/text v0.29.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
-	golang.org/x/tools v0.35.0 // indirect
+	golang.org/x/tools v0.36.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/genproto v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250818200422-3122310a409c // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250818200422-3122310a409c // indirect
-	google.golang.org/protobuf v1.36.7 // indirect
+	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
