@@ -4,25 +4,35 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"cloud.google.com/go/pubsub/v2"
 	"github.com/rs/zerolog"
 )
 
+type ReceiveSettings struct {
+	MaxOutstandingMessages int
+	NumGoroutines          int
+	MinAckDeadline         time.Duration
+}
+
 // GooglePubsubConsumerConfig holds all configuration for the GooglePubsubConsumer.
 // REFACTOR: Removed SubscriptionExistsTimeout as the existence check is removed.
 type GooglePubsubConsumerConfig struct {
-	SubscriptionID         string
-	MaxOutstandingMessages int
-	NumGoroutines          int
+	SubscriptionID string
+	pubsub.ReceiveSettings
 }
 
 // NewGooglePubsubConsumerDefaults provides a config with sensible defaults.
 func NewGooglePubsubConsumerDefaults(subscriptionID string) *GooglePubsubConsumerConfig {
 	return &GooglePubsubConsumerConfig{
-		SubscriptionID:         subscriptionID,
-		MaxOutstandingMessages: 100,
-		NumGoroutines:          5,
+		SubscriptionID: subscriptionID,
+		ReceiveSettings: pubsub.ReceiveSettings{
+			MaxOutstandingMessages: 100,
+			NumGoroutines:          5,
+			// Set a default MinAckDeadline to prevent very short, aggressive retries.
+			MinDurationPerAckExtension: 10 * time.Second,
+		},
 	}
 }
 
